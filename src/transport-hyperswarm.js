@@ -6,9 +6,20 @@
  *   hyperswarm 负责 DHT 发现、UDP 打洞和每条连接上的 Noise 加密。
  *   topic 本身就是能力凭证:知道 topic 就能找到彼此(见 backlog/01)。
  *
- *   token 鉴权是 story 06,不在这一层。但每条连接的帧序列设计成
- *   "先身份、后信封":hello(以及 06 会插入的 auth 帧)必须在任何
- *   信封被接受之前到达。见 handleFrame。
+ *   ── 威胁模型(story 06)──
+ *   topic 是能力凭证,不是秘密:知道 topic 就能被 DHT 发现并建立连接。
+ *   Noise 提供的是每条连接的机密性与完整性 —— 它保证"这条链路的对端就是
+ *   它自称的那个 Noise 身份",但不证明"它属于这个团队"。
+ *   团队身份靠应用层的 HMAC-SHA256 持有证明:key = team token,
+ *   message = 版本串 || topic || Noise handshakeHash || 发起/响应角色。
+ *   原始 token **永不上线**,只发 MAC;两侧对称发送、常数时间校验,
+ *   校验通过之前不接受任何身份帧或信封。
+ *   结论:只有 topic 没有 token 的陌生人既无法冒充成员,也拿不到任何
+ *   可用信息 —— 只会被明确拒绝。team token 必须是高熵随机值
+ *   (MAC 的 key 强度就是 token 的强度)。
+ *
+ *   每条连接的帧序列是"auth → hello → 信封":parseFrame 在任何
+ *   信封被接受之前要求 auth 已通过、hello 已到达。见 handleFrame。
  *
  * ── 与 mesh 的关系 ──
  *   send() 的收件人解析、成员视图字段、投递语义都尽量与 mesh 一致,
@@ -24,7 +35,8 @@
  */
 
 import { createRequire } from "node:module";
-import { FrameReader, encodeFrame, closeFrame, pingFrame, pongFrame } from "./ws.js";
+import { createHmac } from "node:crypto";
+import { FrameReader, encodeFrame, closeFrame, pingFrame, pongFrame, tokenEquals } from "./ws.js";
 import { createEmitter } from "./transport.js";
 import { resolveTargets } from "./transport-mesh.js";
 
@@ -33,6 +45,27 @@ const HEARTBEAT_MS = 15_000;
 const FLUSH_TIMEOUT_MS = 10_000;
 /** 帧超限时写进 close 原因的前缀,便于对端识别。 */
 const MAX_PAYLOAD_HINT = "message too large";
+
+/** 证明绑定用的协议版本串,参与 HMAC,防止跨版本重放。 */
+const PROTOCOL_VERSION = "pi-agent-team/v1";
+/** 鉴权之前允许的单帧上限。auth 帧只有几百字节,超出即视为滥用。 */
+const PREAUTH_MAX_BYTES = 4 * 1024;
+/** 从建立起连接起,多久没完成 token 证明就断开,避免挂住未鉴权连接。 */
+const HANDSHAKE_TIMEOUT_MS = 8_000;
+
+/**
+ * 团队成员的持有证明(key = team token,message = 版本串 || topic ||
+ * Noise handshakeHash || 角色)。handshakeHash 两侧相同、随 Noise 会话变化,
+ * 所以证明绑定到具体连接;角色两侧互补,防止在反方向重放。
+ */
+function computeProof(teamToken, topicBytes, channelBinding, role) {
+  return createHmac("sha256", teamToken)
+    .update(PROTOCOL_VERSION, "utf8")
+    .update(topicBytes)
+    .update(channelBinding)
+    .update(role, "utf8")
+    .digest();
+}
 
 /** 只在真正需要时解析模块路径,不在这里 require —— 保持 broker/mesh/swim 不受影响。 */
 const nodeRequire = createRequire(import.meta.url);
@@ -116,23 +149,29 @@ export function normalizeBootstrap(raw) {
 /**
  * @param {{
  *   topic: Buffer|Uint8Array|string,   // 32 字节 topic(Buffer / base64url / hex)
+ *   token: string,                     // 团队 token(story 06:持有证明的 key)
  *   bootstrap?: Array|string|null,     // 默认走公共 hyperswarm bootstrap
  *   dht?: object|null,                 // 注入的 hyperdht 实例(测试用)
  *   HyperswarmImpl?: unknown,          // 注入的 Hyperswarm 构造器(测试用)
  *   heartbeatMs?: number,
  *   flushTimeoutMs?: number,
+ *   handshakeTimeoutMs?: number,       // 未完成 token 证明的连接多久被断开
  * }} opts
  */
 export function createHyperswarmTransport({
   topic,
+  token,
   bootstrap = null,
   dht = null,
   HyperswarmImpl = null,
   heartbeatMs = HEARTBEAT_MS,
   flushTimeoutMs = FLUSH_TIMEOUT_MS,
+  handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS,
 } = {}) {
   const bus = createEmitter();
   const resolvedTopic = normalizeTopic(topic);
+  // token 缺失就 fail closed:没有 key 就算不出证明,任何对端都不该被信任。
+  const teamToken = token == null || token === "" ? null : String(token);
 
   let self = null;
   let swarm = null;
@@ -199,13 +238,137 @@ export function createHyperswarmTransport({
   }
 
   /**
+   * 角色由噪声/连接方向决定:主动 dial 的一方是 initiator,另一方是
+   * responder。两侧取值互补,所以证明不能反方向重放。
+   */
+  function connectionRole(socket, peerInfo) {
+    const initiator =
+      typeof socket?.isInitiator === "boolean" ? socket.isInitiator : peerInfo?.client === true;
+    return initiator ? "initiator" : "responder";
+  }
+
+  function clearAuthTimer(session) {
+    if (session.authTimer) {
+      clearTimeout(session.authTimer);
+      session.authTimer = null;
+    }
+  }
+
+  /** 本端 auth 帧:只带 MAC,永远不带原始 token。 */
+  function authFrame(session) {
+    const proof = computeProof(teamToken, resolvedTopic, session.binding, session.role);
+    return JSON.stringify({ t: "auth", v: 1, proof: proof.toString("base64url") });
+  }
+
+  /**
+   * 明确拒绝一个对端。原因镜像 probeAuth(token_mismatch / token_missing),
+   * 先发帧再断开 —— 裸 close 在对端看来就是 1006,和网络断开无法区分。
+   */
+  function refuse(session, reason) {
+    if (session.refused) return;
+    session.refused = true;
+    clearAuthTimer(session);
+    try {
+      session.socket.write(encodeFrame(JSON.stringify({ t: "auth_failed", reason })));
+    } catch {}
+    bus.emit("diagnostic", { source: "hyperswarm", kind: "auth_failed", reason, peer: session.key });
+    const timer = setTimeout(() => {
+      try {
+        session.socket.destroy();
+      } catch {}
+    }, 200);
+    timer.unref?.();
+  }
+
+  /**
+   * 校验对端证明。用对端角色重算期望值,常数时间比较。
+   * 任何失败都只针对这条连接/这个对端,绝不 setState —— 陌生人不该
+   * 把诚实节点的房间级状态拉下线。
+   */
+  function handleAuthFrame(session, env) {
+    if (session.authenticated || session.refused) return;
+    if (!teamToken) {
+      refuse(session, "token_missing");
+      return;
+    }
+    if (env.v !== 1 || typeof env.proof !== "string" || !env.proof) {
+      refuse(session, "token_missing");
+      return;
+    }
+    // 没有 handshakeHash 就无法绑定会话 —— 不能算出期望值,只能 fail closed。
+    if (!session.binding) {
+      refuse(session, "token_missing");
+      return;
+    }
+    const peerRole = session.role === "initiator" ? "responder" : "initiator";
+    const expected = computeProof(teamToken, resolvedTopic, session.binding, peerRole).toString("base64url");
+    if (!tokenEquals(env.proof, expected)) {
+      refuse(session, "token_mismatch");
+      return;
+    }
+    session.authenticated = true;
+    clearAuthTimer(session);
+  }
+
+  /** 对端明确拒绝了我们(它那边的 token 和我们的不匹配)。只处理这条连接。 */
+  function handlePeerRefusal(session, env) {
+    if (session.refused) return;
+    session.refused = true;
+    clearAuthTimer(session);
+    bus.emit("diagnostic", {
+      source: "hyperswarm",
+      kind: "peer_refused",
+      reason: env.reason ?? null,
+      peer: session.key,
+    });
+    try {
+      session.socket.destroy();
+    } catch {}
+  }
+
+  /**
+   * 发起鉴权:绑定 Noise handshakeHash,先发 auth(第一条帧)、再发 hello。
+   * 两侧都主动发,不存在"等对方先说"的死锁。
+   */
+  function beginHandshake(session) {
+    if (stopped || session.refused || session.authenticated) return;
+    if (session.socket.destroyed) return;
+    if (!teamToken || !resolvedTopic) {
+      refuse(session, "token_missing");
+      return;
+    }
+    const binding = session.socket.handshakeHash;
+    if (!binding) {
+      // Noise 握手尚未完成(极少见):稍后重试;deadline 会兜底。
+      const t = setTimeout(() => beginHandshake(session), 20);
+      t.unref?.();
+      return;
+    }
+    session.binding = Buffer.from(binding);
+    writeText(session, authFrame(session));
+    writeText(session, helloFrame());
+  }
+
+  /**
    * 收到一条完整文本帧。
    *
-   * 顺序门禁:身份帧(hello)必须先到,信封才被接受。story 06 的 token
-   * 握手就插在这个位置 —— 在 hello 与 "ready" 之间要求一个 auth 帧,
-   * 通过后才置 ready。本 story 只用 topic 能力,故 hello 即 ready。
+   * 顺序门禁:必须先通过 token 持有证明(auth),对端身份(hello)才被
+   * 接受;身份建立(ready)之前,任何信封都不被接受。
    */
   function handleFrame(session, text) {
+    if (session.refused) return;
+
+    // pre-auth 帧必须有界:topic 持有者不能靠超大帧撑爆内存。
+    if (!session.authenticated && Buffer.byteLength(text, "utf8") > PREAUTH_MAX_BYTES) {
+      try {
+        session.socket.write(closeFrame(1009, `${MAX_PAYLOAD_HINT}: pre-auth frame`));
+      } catch {}
+      try {
+        session.socket.destroy();
+      } catch {}
+      return;
+    }
+
     let env;
     try {
       env = JSON.parse(text);
@@ -214,7 +377,20 @@ export function createHyperswarmTransport({
     }
     if (!env || typeof env !== "object") return;
 
+    if (env.t === "auth") {
+      handleAuthFrame(session, env);
+      return;
+    }
+    if (env.t === "auth_failed") {
+      handlePeerRefusal(session, env);
+      return;
+    }
+
     if (env.kind === "hyperswarm-hello") {
+      // 没证明持有 token 之前,不接受任何身份元数据。
+      if (!session.authenticated) return;
+      // 一旦身份建立,忽略后续的 hello —— 防止中途改名字冒充别人。
+      if (session.ready) return;
       if (!env.name) return;
       session.name = String(env.name);
       session.host = env.host ?? null;
@@ -224,7 +400,7 @@ export function createHyperswarmTransport({
       return;
     }
 
-    // 身份未建立之前的任何信封都不接受。story 06 会在这里要求 auth。
+    // 身份未建立(未鉴权或未 hello)之前的任何信封都不接受。
     if (!session.ready) return;
 
     // env.from 一律忽略:身份来自连接,不来自发送方的自述。
@@ -269,9 +445,20 @@ export function createHyperswarmTransport({
       labels: [],
       since: Date.now(),
       socket,
+      role: connectionRole(socket, peerInfo),
+      binding: null,
+      authenticated: false,
+      refused: false,
       ready: false,
+      authTimer: null,
     };
     sessions.set(key, session);
+
+    // 未完成 token 证明的连接不能永久挂住:超时就拒绝并断开。
+    session.authTimer = setTimeout(() => {
+      if (!session.authenticated) refuse(session, "token_missing");
+    }, handshakeTimeoutMs);
+    session.authTimer.unref?.();
 
     const reader = new FrameReader({
       onText: (t) => handleFrame(session, t),
@@ -306,8 +493,9 @@ export function createHyperswarmTransport({
       emitMembership();
     });
 
-    // 连上就自我介绍。对端收到后才把我们加进它的成员表。
-    writeText(session, helloFrame());
+    // 连上立刻发起鉴权:先 auth 帧(带 MAC),再 hello。
+    // 对端只有验过我们的证明、并且它的证明也通过后,才会把我们当成员。
+    beginHandshake(session);
 
     const hb = setInterval(() => {
       try {
@@ -324,6 +512,18 @@ export function createHyperswarmTransport({
     async start(nextSelf) {
       self = nextSelf;
       stopped = false;
+
+      // token 缺失:fail closed。不发一个证明都算不出的连接出去。
+      if (!teamToken) {
+        setState("connecting");
+        state = "offline";
+        bus.emit("state", "offline", {
+          reason: "token_missing",
+          message:
+            "hyperswarm 模式需要 team token(与其它模式共享的密钥)。缺少它就无法证明成员身份,拒绝加入。",
+        });
+        return;
+      }
       setState("connecting");
 
       if (!resolvedTopic) {
@@ -358,7 +558,10 @@ export function createHyperswarmTransport({
       }
 
       swarm.on("connection", handleConnection);
-      swarm.on("error", () => {});
+      swarm.on("error", (err) => {
+        // 不再静默:swarm 级错误(DHT/网络)通过诊断事件暴露,便于排查。
+        bus.emit("diagnostic", { source: "swarm", kind: "error", message: String(err?.message ?? err) });
+      });
 
       try {
         discovery = swarm.join(resolvedTopic, { server: true, client: true });

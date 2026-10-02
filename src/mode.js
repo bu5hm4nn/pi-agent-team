@@ -116,7 +116,11 @@ export function createTransport({
       if (!dep.ok) return { ok: false, reason: dep.reason };
       return {
         ok: true,
-        transport: createHyperswarmTransport({ topic: config.topic, HyperswarmImpl: dep.Hyperswarm }),
+        transport: createHyperswarmTransport({
+          topic: config.topic,
+          token,
+          HyperswarmImpl: dep.Hyperswarm,
+        }),
       };
     }
 
