@@ -123,6 +123,25 @@ go build -o ../swim-sidecar .
 `swim` seeds use the **gossip** port, not the delivery port. `/team status`
 prints the right one.
 
+### Option C — one-line join for a fresh worker
+
+For a rented, ephemeral box (a vast.ai GPU worker, a throwaway container) that
+has nothing configured, the whole setup is one line. The punch URI already
+carries the room name, its DHT topic and the token, so no address, port, VPN or
+key rotation is involved:
+
+```bash
+TEAM_PUNCH='<uri>' pi
+```
+
+Get the URI from `/team create <name>` — `/team create` with no `--url` and no
+`--mode` creates a hyperswarm room, generates the token and topic, and prints one
+pasteable `punch://<name>/<topic>/<token>` URI. `TEAM_TOKEN` still works as an
+optional override (for example to rotate a token without re-issuing the URI), but
+it is not a second requirement: the URI already carries the token.
+
+`/team join <uri>` and the `team_join` tool accept the same URI.
+
 ### Then talk
 
 ```
