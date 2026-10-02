@@ -1,0 +1,294 @@
+version: 1
+updated: 2026-10-02
+entry_point: backlog/index.yaml
+
+# Story areas, and what each means.
+areas:
+  transport: the pluggable transport seam (src/transport.js) and the new serverless transport
+  rooms: room identity, membership and per-room session state (the Phase 3 end goal)
+  delivery: how a teammate message reaches the model — batching, freshness, ordering
+  security: capability and authorization for a serverless path (topic secrecy vs team token)
+  tests: the shared conformance suite and its coverage of a new transport
+  docs: README, how-it-works and roadmap for the new mode and the punch URI
+  ops: provisioning a fresh, often ephemeral and rented, worker with the fewest moving parts
+
+mission: >-
+  Let several machines running the Pi coding agent work as one team with the
+  fewest moving parts — and, for rented and ephemeral workers, with no
+  per-machine network setup at all. Delivered in phases: a serverless
+  hole-punched mesh first, multi-room isolation last.
+
+north_star: >-
+  A fresh worker joins by presenting a single punch URI: no VPN client, no
+  reachable broker, no public port, no per-host configuration beyond that string,
+  and an end-to-end-encrypted path. Phase 1 gets a session into one isolated room
+  this way; Phase 3 lets one session hold many isolated rooms at once, so a
+  node in project A's room never sees project B's.
+
+boundaries: >-
+  Phase 1 keeps one team per session: a team is a room, and isolation is by
+  distinct topic. Phase 3 makes rooms first-class and removes the one-team
+  limit. Delivery stays request/reply-shaped with the hop backstop, and a new
+  transport must satisfy the same conformance suite as broker, mesh and swim —
+  it may not relax them. No broker is required for the new path, but the
+  existing modes are not removed.
+
+not_goals:
+  - >-
+    A public relay or exposed port. If the path needs a reachable address, it has
+    not solved the problem the phase exists for.
+  - >-
+    Per-worker VPN provisioning. If a transport needs a client installed on each
+    ephemeral worker, it has not solved the stated problem.
+  - >-
+    Replacing broker/mesh/swim for users who already have a reachable host.
+    Hyperswarm removes the need for a *reachable address*; it does not deprecate
+    the other modes.
+  - >-
+    A second authorization model. The topic key is a capability; the room token
+    is the authorization. Neither replaces the other.
+  - >-
+    Multi-room before the mesh works. Rooms are the end state, not a Phase 1
+    dependency; the mesh is valuable on its own because a team is already a room.
+
+phases:
+  - id: 1
+    name: "Holepunch mesh"
+    goal: >-
+      A serverless, NAT-traversing mesh, one team per session. `/team create
+      <name>` emits one pasteable punch URI (room + token + host hint); `/team
+      join <uri>` joins it from elsewhere. This is the milestone that removes the
+      reachable address and the per-worker network setup. It is first because it
+      is the most important feature and it does not depend on rooms.
+    stories: ["01", "02", "03", "06", "07a", "08"]
+  - id: 2
+    name: "Delivery hygiene"
+    goal: >-
+      Make a busy agent's inbound honest: one batched, timestamped digest instead
+      of a burst of stale per-turn messages, plus a max age that drops what is
+      too old to matter.
+    stories: ["04", "05", "07b"]
+  - id: 3
+    name: "Multi-room sessions (end goal)"
+    goal: >-
+      One session holds many isolated rooms at once. Rooms stay separate by
+      construction (distinct topics); a session in project A never sees project
+      B's nodes. This is the end goal, deliberately last.
+    stories: ["09", "10", "11"]
+
+decisions:
+  - id: phased-mesh-first
+    decision: >-
+      Ship the hole-punch mesh on the existing one-team-per-session model before
+      touching rooms. A team already maps to a topic, so Phase 1 delivers the
+      isolation that matters (one project, one topic) without the room-registry
+      refactor; multi-room is the Phase 3 end goal.
+    date: 2026-10-02
+    landed: null
+  - id: build-on-hyperswarm-not-a-relay
+    decision: >-
+      The serverless transport is built on Holepunch's hyperswarm (DHT
+      discovery, UDP hole punching, Noise per-connection encryption) as a new
+      src/transport.js implementation, not by adapting a relay-based extension.
+      The relay's delivery layer — the thing that delivered messages 10–20
+      minutes late — is the layer being replaced.
+    date: 2026-10-02
+    landed: null
+  - id: digest-is-opt-in
+    decision: >-
+      Batching several queued messages into one timestamped digest ships as an
+      opt-in delivery mode; the per-message default is unchanged so no existing
+      behaviour moves without choosing it.
+    date: 2026-10-02
+    landed: null
+  - id: generated-topic-capability
+    decision: >-
+      The DHT topic is a generated 32-byte capability persisted per team next to
+      the token and base64url-encoded in the punch URI. It is not derived from the
+      room name (which leaks the room to DHT metadata lookups) and not from the
+      token (which couples two independent secrets). Bootstrap defaults to the
+      public hyperswarm set and is injectable for self-hosting.
+    date: 2026-10-02
+    landed: null
+  - id: token-possession-proof-over-swarm
+    decision: >-
+      The serverless path authorizes with an application-level HMAC-SHA256
+      possession proof over the team token — never the raw token. The proof is
+      bound to the Noise session (socket.handshakeHash), the topic, a protocol
+      version string and the initiator/responder role, compared in constant time,
+      and verified before any envelope or membership event. Refusal mirrors
+      probeAuth; auth_failed is per-peer, never a room-wide latch. (Council
+      session: baa4d930 / 9809da53.)
+    date: 2026-10-02
+    landed: null
+  - id: punch-uri-two-secrets-no-host-key
+    decision: >-
+      The punch URI carries the room name (a non-secret label), the topic
+      capability and the token: punch://<name>/<topic>/<token>. The separate "host
+      hint" is dropped — DHT discovery removes seed addresses and the token is the
+      authorization, so a third field would verify nothing. /team create <name>
+      defaults to the hyperswarm mode and prints the URI; /team join <uri> takes
+      only the URI.
+    date: 2026-10-02
+    landed: null
+  - id: accept-native-dependency-and-public-bootstrap
+    decision: >-
+      Accept the hyperswarm native dependency (pinned 4.17.2 + hyperdht, committed
+      lockfile, package.json files[] entries) and the default public DHT bootstrap,
+      with bootstrap injectable for future self-hosting. The native addon is loaded
+      lazily so broker/mesh/swim are unaffected when it is absent.
+    date: 2026-10-02
+    landed: null
+
+open_decisions:
+  - id: idle-gate-vs-turn-boundary
+    question: >-
+      Whether a busy agent receives a digest at the next turn boundary (as this
+      repo's delivery does) or waits for full idle (as the relay extension does).
+      The observed 10–20 minute delay came from waiting for idle.
+    owner: maintainer
+  - id: multi-room-membership
+    question: >-
+      Whether a session must hold many rooms at once (Phase 3) and whether rooms
+      need sub-room isolation beyond distinct topics. This is the end-goal
+      decision and gates stories 09–11.
+    owner: maintainer
+
+history:
+  note: >-
+    Seeded from the fork, then restructured into phases on 2026-10-02: hole-punch
+    mesh first (Phase 1), delivery hygiene second, multi-room last. The design
+    rationale lives in the session that produced it — the serverless goal, the
+    measured delivery behaviour of the alternatives, and the two-peer hyperswarm
+    smoke test are recorded in the story evidence.
+
+numbering:
+  - "01"
+  - "02"
+  - "03"
+  - "04"
+  - "05"
+  - "06"
+  - "07a"
+  - "07b"
+  - "08"
+  - "09"
+  - "10"
+  - "11"
+
+# Urgency bands. These are the planner's initial placement, NOT a council pass.
+# Phase 1 owns `now` and `next`; everything else is `later` until the mesh lands.
+urgency:
+  now: ["01", "02", "06"]
+  next: ["03", "07a", "08"]
+  later: ["04", "05", "07b", "09", "10", "11"]
+  only-if: []
+
+dependencies:
+  edges:
+    - "02 -> 01 — a punch URI has nothing to join until the transport exists"
+    - "03 -> 01 — conformance coverage follows the implementation"
+    - "05 -> 04 — a TTL is applied where the digest is composed"
+    - "06 -> 01 — the handshake rides the transport"
+    - "07a -> 01, 02 — the transport and punch URI must exist before they are documented"
+    - "07b -> 04, 05 — delivery modes and the max age must exist before they are documented"
+    - "08 -> 02 — provisioning hands out the punch URI"
+    - "09 -> 01, 02 — a session can only hold many rooms once one room works serverless"
+    - "10 -> 09 — room-scoped tools need the room registry"
+    - "11 -> 06, 09 — isolation is asserted against the token gate and the registry"
+  verification_prerequisites:
+    - "01, 02, 03, 06 and 11 need two reachable nodes for a live check; the conformance suite is the in-repo substitute for cross-network tests and must pass before any live claim."
+
+urgency_review:
+  date: 2026-10-02
+  advisors: []
+  method: >-
+    No council pass has run. The bands are the planner's initial placement and
+    are expected to be reviewed by the project's council before the first work
+    wave. Planner model: openai-codex/gpt-6-astra.
+
+stories:
+  - id: "01"
+    title: "hyperswarm transport — serverless node-to-node delivery"
+    area: transport
+    status: queued
+    file: backlog/01-hyperswarm-transport.md
+    depends_on: []
+    owner_decision: null
+  - id: "02"
+    title: "punch URI — one string a fresh worker can present"
+    area: transport
+    status: queued
+    file: backlog/02-punch-uri.md
+    depends_on: ["01"]
+    owner_decision: null
+  - id: "03"
+    title: "conformance coverage for the hyperswarm transport"
+    area: tests
+    status: queued
+    file: backlog/03-transport-conformance.md
+    depends_on: ["01"]
+    owner_decision: null
+  - id: "04"
+    title: "delivery — batch queued messages into one timestamped digest"
+    area: delivery
+    status: queued
+    file: backlog/04-delivery-digest.md
+    depends_on: []
+    owner_decision: idle-gate-vs-turn-boundary
+  - id: "05"
+    title: "delivery — max age for queued messages"
+    area: delivery
+    status: queued
+    file: backlog/05-delivery-ttl.md
+    depends_on: ["04"]
+    owner_decision: null
+  - id: "06"
+    title: "security — topic capability and the room token"
+    area: security
+    status: queued
+    file: backlog/06-topic-capability-and-token.md
+    depends_on: ["01"]
+    owner_decision: null
+  - id: "07a"
+    title: "docs — the punch URI and the fourth transport"
+    area: docs
+    status: queued
+    file: backlog/07a-docs-transport.md
+    depends_on: ["01", "02"]
+    owner_decision: null
+  - id: "07b"
+    title: "docs — delivery modes and the max age"
+    area: docs
+    status: queued
+    file: backlog/07b-docs-delivery.md
+    depends_on: ["04", "05"]
+    owner_decision: null
+  - id: "08"
+    title: "ops — one-line join for a fresh, ephemeral worker"
+    area: ops
+    status: queued
+    file: backlog/08-ephemeral-provisioning.md
+    depends_on: ["02"]
+    owner_decision: null
+  - id: "09"
+    title: "multi-room session core — one session, many rooms"
+    area: rooms
+    status: queued
+    file: backlog/09-multi-room-session.md
+    depends_on: ["01", "02"]
+    owner_decision: multi-room-membership
+  - id: "10"
+    title: "room-scoped tool and command API"
+    area: rooms
+    status: queued
+    file: backlog/10-room-scoped-api.md
+    depends_on: ["09"]
+    owner_decision: null
+  - id: "11"
+    title: "room isolation — a session never sees another room's nodes"
+    area: tests
+    status: queued
+    file: backlog/11-room-isolation.md
+    depends_on: ["06", "09"]
+    owner_decision: null
