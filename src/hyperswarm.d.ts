@@ -12,7 +12,22 @@ declare module "hyperswarm" {
     publicKey: Buffer;
     topics: Buffer[];
     prioritized: boolean;
+    /** 该连接是否由本端主动 dial(连接方向) */
+    client?: boolean;
     ban(status?: boolean): void;
+  }
+
+  /**
+   * hyperswarm 的 connection 事件给出的加密流(NoiseSecretStream)。
+   * 只声明本仓库用到的部分:读写、以及 Noise 会话绑定。
+   */
+  interface NoiseSocket extends Duplex {
+    /** 本端是否为 Noise 握手发起方,两侧互补 */
+    isInitiator: boolean;
+    /** 本次 Noise 会话的握手哈希,两侧相同;鉴权证明绑定它 */
+    handshakeHash: Buffer | null;
+    /** 对端 Noise 公钥 */
+    remotePublicKey: Buffer | null;
   }
 
   interface KeyPair {
@@ -63,7 +78,7 @@ declare module "hyperswarm" {
     resume(opts?: { log?: (msg: string) => void }): Promise<void>;
     destroy(opts?: { force?: boolean }): Promise<void>;
 
-    on(event: "connection", listener: (socket: Duplex, peerInfo: PeerInfo) => void): this;
+    on(event: "connection", listener: (socket: NoiseSocket, peerInfo: PeerInfo) => void): this;
     on(event: "update", listener: () => void): this;
     on(event: "ban", listener: (peerInfo: PeerInfo, err: Error) => void): this;
     on(event: string | symbol, listener: (...args: unknown[]) => void): this;
