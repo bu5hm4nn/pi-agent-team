@@ -22,6 +22,7 @@ import {
   toSocketUrl,
   validateAgentName,
   validateTeamName,
+  validateToken,
   validateTopic,
   writeTeam,
 } from "./team-config.js";
@@ -101,11 +102,38 @@ test("create:url 协议不对时拒绝", (t) => {
   }
 });
 
-test("create:非 hex 的 token 被拒(提示用 openssl 生成)", (t) => {
+test("token:至少 16 位、只允许 URI-safe 字符", () => {
+  assert.equal(validateToken(generateToken()).ok, true, "生成的 64 位 hex 必须通过");
+  assert.equal(validateToken("a".repeat(16)).ok, true);
+  assert.equal(validateToken("a_b-cD9".repeat(3)).ok, true, "- 和 _ 是 URI-safe 字符");
+  assert.equal(validateToken("short").ok, false, "太短");
+  assert.equal(validateToken("a".repeat(15)).ok, false);
+  for (const bad of ["a".repeat(15) + "/", "has space" + "a".repeat(10), "a".repeat(15) + "+", "a".repeat(15) + "=", "a".repeat(15) + ":"]) {
+    assert.equal(validateToken(bad).ok, false, `含 URI 不安全字符应被拒:${bad}`);
+  }
+});
+
+test("token:通过校验的值能原样放进 punch URI 并解析回来", () => {
+  const token = "abc-DEF_0123456789";
+  assert.equal(validateToken(token).ok, true);
+  const uri = buildPunchUri({ name: "dev", topic: generateTopic(), token });
+  const parsed = parsePunchUri(uri);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.token, token, "round-trip 必须无损");
+});
+
+test("create:token 太短或含 URI 不安全字符时被拒", (t) => {
   const home = withHome(t);
-  const r = createTeam({ team: "alpha", url: URL_OK, token: "short", home });
-  assert.equal(r.ok, false);
-  assert.match(r.reason, /hex/);
+  const short = createTeam({ team: "alpha", url: URL_OK, token: "short", home });
+  assert.equal(short.ok, false);
+  assert.match(short.reason, /16/, "要说清长度下限");
+  assert.match(short.reason, /hex/, "仍提示可用 openssl rand -hex 32 生成");
+
+  const unsafe = createTeam({ team: "beta", url: URL_OK, token: "abc/def+ghi=jkl:mnop", home });
+  assert.equal(unsafe.ok, false, "含路径分隔符的 token 会切坏 punch URI,必须拒绝");
+
+  const ok = createTeam({ team: "gamma", url: URL_OK, token: generateToken(), home });
+  assert.equal(ok.ok, true, "openssl rand -hex 32 生成的仍可用");
 });
 
 test("create:复用已有 token 时 created=false,不泄漏到返回值以外", (t) => {
@@ -184,15 +212,32 @@ test("join:把 punch URI 带的 topic 落盘", (t) => {
   assert.equal(statSync(join(configDir(home), "joined.json")).mode & 0o777, 0o600);
 });
 
-test("join:已有 hyperswarm 配置缺 topic(旧版本)时补一个", (t) => {
+test("join:已有 hyperswarm 配置缺 topic(旧版本)时拒绝,不再生成新房间", (t) => {
   const home = withHome(t);
   // 模拟旧版本:mode=hyperswarm 但没有 topic
   writeTeam("old", { mode: "hyperswarm", token: generateToken() }, home);
   assert.equal("topic" in readTeam("old", home), false);
 
   const r = joinTeam({ team: "old", home });
+  assert.equal(r.ok, false, "缺 topic 必须拒绝,而不是静默补一个");
+  assert.match(r.reason, /punch URI/, "要指向正确的加入方式");
+  assert.equal("topic" in readTeam("old", home), false, "不得写下一个不同的 topic(那会进入另一个房间)");
+});
+
+test("join:已有 hyperswarm 配置带着 topic 时仍可直接加入", (t) => {
+  const home = withHome(t);
+  const created = createTeam({ team: "hs-ok", mode: "hyperswarm", home });
+  const r = joinTeam({ team: "hs-ok", home });
   assert.equal(r.ok, true);
-  assert.equal(validateTopic(readTeam("old", home).topic).ok, true, "应补上 topic");
+  assert.equal(r.config.topic, created.config.topic);
+});
+
+test("join:首次以 hyperswarm 加入但没带 topic 时拒绝", (t) => {
+  const home = withHome(t);
+  const r = joinTeam({ team: "fresh", mode: "hyperswarm", token: generateToken(), home });
+  assert.equal(r.ok, false, "join 不该凭空创建一个新房间");
+  assert.match(r.reason, /punch URI/);
+  assert.equal(readTeam("fresh", home), null, "不该留下任何配置");
 });
 
 test("round-trip:create(hyperswarm) → URI → parse → join 记录一致", (t) => {

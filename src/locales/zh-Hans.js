@@ -216,7 +216,7 @@ export const zhHans = Object.freeze({
 
   "transport.swimSidecarMissing": "找不到 SWIM 边车。构建:进入包的 swim/ 目录执行 go build -o ../swim-sidecar . ,或用 PI_TEAM_SWIM_SIDECAR 指到构建产物。",
 
-  "options.help": "  --url <http://host:port>    broker 地址(broker 模式必需)\n  --token <hex>               team token(必需)\n  --mode <broker|mesh|swim|hyperswarm>   投递模式(create 不带 url 时默认 hyperswarm)\n  --topic <base64url>         hyperswarm 的 32 字节 topic(通常由 punch URI 携带)\n  --punch <punch://...>       用 punch URI 加入(等价于 /team join <uri>)\n  --seeds <host:port,...>     mesh/swim 的种子地址\n  --name <名字>               本节点名(仅本次运行)\n  --labels <a,b>              本节点标签(仅本次运行)\n  --port <n>                  mesh/swim 监听端口(仅本次运行,0 = 自动)\n  --listen <地址>             mesh/swim 监听地址(仅本次运行)",
+  "options.help": "  --url <http://host:port>    broker 地址(broker 模式必需)\n  --token <token>             team token(必需;至少 16 位,只能用字母数字 - _,如 openssl rand -hex 32 生成的)\n  --mode <broker|mesh|swim|hyperswarm>   投递模式(create 不带 url 时默认 hyperswarm)\n  --topic <base64url>         hyperswarm 的 32 字节 topic(通常由 punch URI 携带)\n  --punch <punch://...>       用 punch URI 加入(等价于 /team join <uri>)\n  --seeds <host:port,...>     mesh/swim 的种子地址\n  --name <名字>               本节点名(仅本次运行)\n  --labels <a,b>              本节点标签(仅本次运行)\n  --port <n>                  mesh/swim 监听端口(仅本次运行,0 = 自动)\n  --listen <地址>             mesh/swim 监听地址(仅本次运行)",
   "options.urlInvalid": "url 需要以 http:// 或 https:// 开头,实际 \"{value}\"",
   "options.tokenTooShort": "token 太短(至少 16 位)",
   "options.modeInvalid": "mode 只能是 {modes},实际 \"{value}\"",

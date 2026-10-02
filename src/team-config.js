@@ -33,6 +33,26 @@ const TEAM_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 export const generateToken = () => randomBytes(32).toString("hex");
 
 /**
+ * token 必须能原样放进 punch URI 的路径段里,所以字符集限制为
+ * URI-safe:字母、数字、-、_。任何被这里接受的值,buildPunchUri
+ * 生成后 parsePunchUri 都能原样解析回来 —— 这是 round-trip 的前提。
+ *
+ * 至少 16 位是原来的长度下限,这里保持不变;新增的是字符集约束。
+ */
+const TOKEN_RE = /^[A-Za-z0-9_-]{16,}$/;
+
+export function validateToken(token) {
+  if (typeof token !== "string" || !TOKEN_RE.test(token)) {
+    return {
+      ok: false,
+      reason:
+        "token 至少 16 位,且只能用字母、数字、- 和 _(不能有空格、斜杠或其它符号;openssl rand -hex 32 生成的 64 位 hex 正好符合)",
+    };
+  }
+  return { ok: true };
+}
+
+/**
  * 生成 hyperswarm topic:32 字节 base64url(无填充,43 字符)。
  *
  * 它是**能力凭证**(生成后持久化,不派生自 team 名,也不派生自 token):
@@ -58,6 +78,14 @@ export function validateTopic(topic) {
   }
   return { ok: true };
 }
+
+/**
+ * join 一个 hyperswarm team 却没有 topic 时的统一拒绝文案。
+ *
+ * 指向 punch URI,因为那是正常加入路径;create 才负责生成新房间。
+ */
+const HYPERWARM_TOPIC_REQUIRED =
+  "hyperswarm 模式需要 topic,否则会进入一个和 team 不同的 DHT 房间。用 /team join <punch URI> 带着 topic 加入,或先 /team create <team> 让创建方生成一条 punch URI。";
 
 export const configDir = (home = homedir()) => join(home, ".pi", "agent", "pi-agent-team");
 
@@ -164,9 +192,9 @@ export function createTeam({ team, url, token, labels = [], mode = "broker", see
   if (readTeam(team, home)) {
     return { ok: false, reason: t(M.config.teamExists, { team }) };
   }
-  if (token && !/^[0-9a-fA-F]{16,}$/.test(token)) {
-    // 不强制,只是提醒。用 openssl rand -hex 32 生成的正好符合。
-    return { ok: false, reason: t(M.config.tokenNotHex) };
+  if (token) {
+    const vt = validateToken(token);
+    if (!vt.ok) return { ok: false, reason: vt.reason };
   }
 
   const finalToken = token || generateToken();
@@ -204,6 +232,10 @@ export function joinTeam({ team, url, token, mode, seeds, topic, save = true, ho
   const existing = readTeam(team, home);
 
   if (!existing) {
+    // 加入一个 hyperswarm 房间必须带着 topic。没有 topic 就自动生成一个
+    // 会把这台机器放进另一个 DHT 房间,而且症状是静默的:看起来加入了
+    // team,实际谁也发现不了谁。创建房间是 /team create 的事。
+    if (mode === "hyperswarm" && !topic) return { ok: false, reason: HYPERWARM_TOPIC_REQUIRED };
     if (!token) {
       const known = listTeams(home);
       return {
@@ -218,11 +250,11 @@ export function joinTeam({ team, url, token, mode, seeds, topic, save = true, ho
     return { ok: true, config: created.config, path: created.path, adopted: true };
   }
 
-  // 旧版本的 hyperswarm 配置可能没有 topic —— 补一个并落盘,否则下次
-  // 启动过不了就绪检查。写回后 readTeam 就能暴露它。
-  if (existing.mode === "hyperswarm" && !existing.topic) {
-    existing.topic = generateTopic();
-    writeTeam(team, existing, home);
+  // 已有 hyperswarm 配置缺 topic(旧版本)时**不再**静默补一个随机 topic:
+  // 那会把节点放进一个和团队不同的 DHT 房间。要加入就带上 punch URI 里的
+  // topic;想创建新房间用 /team create。
+  if ((mode ?? existing.mode) === "hyperswarm" && !(topic ?? existing.topic)) {
+    return { ok: false, reason: HYPERWARM_TOPIC_REQUIRED };
   }
 
   // 已有配置又被显式给了选项:更新它。
@@ -232,19 +264,21 @@ export function joinTeam({ team, url, token, mode, seeds, topic, save = true, ho
   if (url || token || mode || topic || seeds?.length) {
     const config = { ...existing };
     if (url) config.url = normalizeUrl(url);
-    if (token) config.token = token;
+    if (token) {
+      const vt = validateToken(token);
+      if (!vt.ok) return { ok: false, reason: vt.reason };
+      config.token = token;
+    }
     if (mode) {
       if (!MODES.includes(mode)) return { ok: false, reason: t(M.config.modeInvalid, { modes: MODES.join(" / "), value: mode }) };
       config.mode = mode;
     }
-    // 从 punch URI 加入:把 URI 携带的 topic 落盘复用。已有 hyperswarm
-    // 配置缺 topic(旧版本)时也补一个,否则下次启动过不了就绪检查。
+    // 从 punch URI 加入:把 URI 携带的 topic 落盘复用。缺 topic 的情况
+    // 已在上面拒绝,不会走到这里再生成一个。
     if (topic) {
       const vt = validateTopic(topic);
       if (!vt.ok) return { ok: false, reason: vt.reason };
       config.topic = topic;
-    } else if (config.mode === "hyperswarm" && !config.topic) {
-      config.topic = generateTopic();
     }
     if (seeds?.length) {
       const clean = (Array.isArray(seeds) ? seeds : String(seeds).split(","))

@@ -119,9 +119,18 @@ test("validateOptions:seed 必须带端口", () => {
   assert.match(bad.reason, /host:port/);
 });
 
-test("validateOptions:token 太短被拒", () => {
+test("validateOptions:token 太短或含 URI 不安全字符被拒", () => {
   assert.equal(validateOptions({ token: "x".repeat(64) }).ok, true);
-  assert.equal(validateOptions({ token: "short" }).ok, false);
+  const short = validateOptions({ token: "short" });
+  assert.equal(short.ok, false);
+  assert.match(short.reason, /16/);
+
+  // 这些字符会把 punch URI 的路径段切坏或无法 round-trip
+  for (const bad of ["a".repeat(15) + "/", "has space" + "a".repeat(10), "a".repeat(15) + "+", "a".repeat(15) + "=", "a".repeat(15) + ":"]) {
+    assert.equal(validateOptions({ token: bad }).ok, false, `应拒绝 token "${bad}"`);
+  }
+  // - 和 _ 是 URI-safe 的
+  assert.equal(validateOptions({ token: "a_b-cD9".repeat(3) }).ok, true);
 });
 
 test("validateOptions:name 允许常见写法,拒绝空格和路径分隔符", () => {
@@ -248,6 +257,14 @@ test("parsePunchUri:topic 长度不对(不是 32 字节)被拒", () => {
   const r = parsePunchUri(`punch://dev/${short}/${ "a".repeat(64)}`);
   assert.equal(r.ok, false);
   assert.match(r.reason, /topic/);
+});
+
+test("parsePunchUri:token 含 URI 不安全字符时被拒(否则 round-trip 会丢字节)", () => {
+  for (const bad of ["a".repeat(15) + "+", "a".repeat(15) + "=", "has space" + "a".repeat(10)]) {
+    const r = parsePunchUri(`punch://dev/${buildPunchTopic()}/${bad}`);
+    assert.equal(r.ok, false, `应拒绝 token "${bad}"`);
+    assert.ok(r.reason && r.reason.length, "必须给出 reason");
+  }
 });
 
 test("validateOptions:punch 展开成 hyperswarm + topic + token", () => {
