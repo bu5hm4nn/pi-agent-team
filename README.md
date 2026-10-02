@@ -46,7 +46,9 @@ Or from GitHub:
 pi install git:github.com/Yiki21/pi-agent-team
 ```
 
-Requires Node 22+ and Pi. No runtime dependencies. Everything below assumes this
+Requires Node 22+ and Pi. No required runtime dependencies; the optional
+hyperswarm (punch) mode adds one lazily-loaded native dependency (`hyperswarm`)
+that broker/mesh/swim do not need. Everything below assumes this
 is installed — there is no path to type.
 
 ## The three modes
