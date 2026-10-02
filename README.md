@@ -51,23 +51,27 @@ hyperswarm (punch) mode adds one lazily-loaded native dependency (`hyperswarm`)
 that broker/mesh/swim do not need. Everything below assumes this
 is installed — there is no path to type.
 
-## The three modes
+## The four modes
 
-All three share one API and pass one conformance suite, so they behave the same.
+All four share one API and pass one conformance suite, so they behave the same.
 Pick one at a time.
 
-| mode | how nodes find each other | how messages travel | needs |
+| mode | members found by | messages travel | what it needs |
 |---|---|---|---|
 | `broker` **(default)** | a broker you run pushes the roster | through the broker | a reachable broker URL |
 | `mesh` | nodes exchange member tables directly | direct node-to-node | one seed address |
 | `swim` | SWIM gossip (Go sidecar) | direct node-to-node | a seed, plus the sidecar built |
+| `hyperswarm` | a DHT topic — the room capability | direct node-to-node, punched through NAT | nothing but the punch URI — no address, no seed |
 
 **Start with `broker`.** It is one process, it survives nodes coming and going,
 and nothing needs to know anyone else's address in advance.
 
 Use `mesh` when you want no centre and every node can reach every other. Use
 `swim` when nodes actually die without saying goodbye and you need the roster to
-notice.
+notice. Use `hyperswarm` when even a seed address is too much to arrange — a
+rented or ephemeral worker with no stable, reachable address of its own. The DHT
+finds the room and the peers punch a direct, encrypted link; the worker needs
+only the punch URI.
 
 ## Use it
 
@@ -123,24 +127,44 @@ go build -o ../swim-sidecar .
 `swim` seeds use the **gossip** port, not the delivery port. `/team status`
 prints the right one.
 
-### Option C — one-line join for a fresh worker
+### Option C — hyperswarm: the punch URI is the whole setup
 
 For a rented, ephemeral box (a vast.ai GPU worker, a throwaway container) that
-has nothing configured, the whole setup is one line. The punch URI already
-carries the room name, its DHT topic and the token, so no address, port, VPN or
-key rotation is involved:
+has no stable address, the entire per-worker setup is one line. There is no
+address to hand out, no port to open, and no per-machine VPN or key rotation.
 
-```bash
-TEAM_PUNCH='<uri>' pi
+Create the room once, on any machine:
+
+```
+/team create dev
 ```
 
-Get the URI from `/team create <name>` — `/team create` with no `--url` and no
-`--mode` creates a hyperswarm room, generates the token and topic, and prints one
-pasteable `punch://<name>/<topic>/<token>` URI. `TEAM_TOKEN` still works as an
-optional override (for example to rotate a token without re-issuing the URI), but
-it is not a second requirement: the URI already carries the token.
+With no `--url` and no `--mode`, `/team create` makes a **hyperswarm** room: it
+generates the room's token and DHT topic, saves them (`0600`), and prints one
+pasteable URI — re-printing the same URI if the team already exists:
 
-`/team join <uri>` and the `team_join` tool accept the same URI.
+```
+punch://dev/<topic>/<token>
+```
+
+Then every other machine joins with just that URI:
+
+```bash
+TEAM_PUNCH='punch://dev/<topic>/<token>' pi
+```
+
+`/team join punch://dev/<topic>/<token>` and the `team_join` tool (pass the URI as
+`punch`) accept the same string. `TEAM_TOKEN` still works as an optional override
+(for example to rotate a token without re-issuing the URI), but it is not a
+second requirement: the URI already carries the token.
+
+**The punch URI is the team secret.** It carries the token, so anyone who has it
+can join the room — and, like a leaked token everywhere else, can evict a node.
+Do not paste it into logs, issue trackers or shell history; treat it exactly like
+the token itself.
+
+`hyperswarm` needs one lazily-loaded native dependency (the optional
+`hyperswarm` package); `broker`, `mesh` and `swim` do not.
 
 ### Then talk
 
@@ -184,8 +208,10 @@ same options as `/team join`.
 |---|---|---|
 | `url` | broker address (broker mode) | yes |
 | `token` | team token | yes |
-| `mode` | `broker` / `mesh` / `swim` | yes |
+| `mode` | `broker` / `mesh` / `swim` / `hyperswarm` | yes |
+| `topic` | hyperswarm DHT topic (the room capability) | yes |
 | `seeds` | mesh/swim seed addresses | yes |
+| `punch` | a `punch://<team>/<topic>/<token>` URI — expands to `mode`/`topic`/`token` | no (input alias) |
 | `name` | this node's name | no |
 | `labels` | this node's labels, for `@label` sends | no |
 | `port` | mesh/swim listening port (0 = pick one) | no |
@@ -243,7 +269,7 @@ yet; it stays Chinese while an upstream contribution is attempted.
 
 [`docs/how-it-works.md`](docs/how-it-works.md) covers:
 
-- the three transports in detail, and which to pick
+- the four transports in detail, and which to pick
 - what a message flows through, and the rules that end a conversation
 - SWIM mode: why the sidecar is Go, and its two ports
 - the security model, and what a stolen token gets an attacker
