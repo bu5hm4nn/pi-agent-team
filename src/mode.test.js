@@ -88,6 +88,8 @@ test("modeReadiness:hyperswarm 需要 topic", () => {
   assert.equal(modeReadiness("hyperswarm", { token: "t" }).ready, false);
   assert.match(modeReadiness("hyperswarm", { token: "t" }).reason, /topic/);
   assert.equal(modeReadiness("hyperswarm", { token: "t", topic: Buffer.alloc(32) }).ready, true);
+  // 拼错的 topic 也不能蒙混过关
+  assert.equal(modeReadiness("hyperswarm", { token: "t", topic: "not-a-topic" }).ready, false);
 });
 
 // ---------------------------------------------------------------- 工厂
@@ -142,6 +144,12 @@ test("createTransport:swim 缺边车是硬失败,不降级成别的模式", () =
 test("createTransport:hyperswarm 缺 topic 时拒绝并说明用法", () => {
   const r = createTransport({ mode: "hyperswarm", config: { token: "t" } });
   assert.equal(r.ok, false);
+  assert.match(r.reason, /topic/);
+});
+
+test("createTransport:hyperswarm 的 topic 拼错时也拒绝", () => {
+  const r = createTransport({ mode: "hyperswarm", config: { token: "t", topic: "not-base64url" } });
+  assert.equal(r.ok, false, "只判 truthy 会让拼错的 topic 到 start() 才失败");
   assert.match(r.reason, /topic/);
 });
 

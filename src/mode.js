@@ -23,7 +23,7 @@ import { createMeshTransport } from "./transport-mesh.js";
 import { createSwimTransport, sidecarAvailable } from "./transport-swim.js";
 import { t } from "./i18n.js";
 import { M } from "./messages.js";
-import { createHyperswarmTransport, hyperswarmAvailable, loadHyperswarm } from "./transport-hyperswarm.js";
+import { createHyperswarmTransport, hyperswarmAvailable, loadHyperswarm, normalizeTopic } from "./transport-hyperswarm.js";
 
 export const MODES = ["broker", "mesh", "swim", "hyperswarm"];
 
@@ -40,7 +40,7 @@ export function resolveMode({ config = {}, env = process.env } = {}) {
  * 创建 transport。
  *
  * @param {{
- *   mode: "broker"|"mesh"|"swim",
+ *   mode: "broker"|"mesh"|"swim"|"hyperswarm",
  *   config: { url?: string, token: string, seeds?: string[], labels?: string[] },
  *   listenHost?: string, listenPort?: number, advertiseHost?: string|null,
  *   sidecarPath?: string|null,
@@ -105,10 +105,13 @@ export function createTransport({
     }
 
     case "hyperswarm": {
-      if (!config.topic) {
+      // topic 必须是能解码成 32 字节的值(Buffer 或 base64url/hex)。
+      // 只判 truthy 会让一个拼错的 topic 到 start() 才失败。
+      const resolvedTopic = normalizeTopic(config.topic);
+      if (!resolvedTopic) {
         return {
           ok: false,
-          reason: "hyperswarm 模式需要 topic(32 字节)。它由 punch URI 生成,先执行 /team create 或 /team join。",
+          reason: "hyperswarm 模式需要 topic(32 字节)。它由 punch URI 生成,先执行 /team create 或 /team join <punch URI>。",
         };
       }
       // 可选原生依赖缺失时明确失败,不拖垮其它模式。
@@ -117,7 +120,7 @@ export function createTransport({
       return {
         ok: true,
         transport: createHyperswarmTransport({
-          topic: config.topic,
+          topic: resolvedTopic,
           token,
           HyperswarmImpl: dep.Hyperswarm,
         }),
@@ -160,9 +163,11 @@ export function modeReadiness(mode, config = {}, sidecarPath = null) {
         ? { ready: true }
         : { ready: false, reason: t(M.mode.swimSidecarNotFound) };
     case "hyperswarm":
-      return config.topic
+      // token 已在函数开头查过;topic 同样必需。用 normalizeTopic 兼容
+      // Buffer/Uint8Array(测试与调用方都可能直接给字节)。
+      return normalizeTopic(config.topic)
         ? { ready: true }
-        : { ready: false, reason: "hyperswarm 模式需要 topic" };
+        : { ready: false, reason: "hyperswarm 模式需要 topic(32 字节)" };
     default:
       return { ready: false, reason: t(M.mode.unknownNoQuote, { mode }) };
   }

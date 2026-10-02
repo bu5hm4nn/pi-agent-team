@@ -32,6 +32,33 @@ const TEAM_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 /** 生成 token:32 字节 = 64 hex,和文档建议的 `openssl rand -hex 32` 一致 */
 export const generateToken = () => randomBytes(32).toString("hex");
 
+/**
+ * 生成 hyperswarm topic:32 字节 base64url(无填充,43 字符)。
+ *
+ * 它是**能力凭证**(生成后持久化,不派生自 team 名,也不派生自 token):
+ * 知道 topic 才能被 DHT 发现并建立连接,见 backlog 决策
+ * generated-topic-capability。
+ */
+export const generateTopic = () => randomBytes(32).toString("base64url");
+
+/** base64url 无填充,32 字节正好 43 个字符 */
+const TOPIC_RE = /^[A-Za-z0-9_-]{43}$/;
+
+/** 校验 topic:必须是 32 字节的 base64url(接受生成器产出的规范形式) */
+export function validateTopic(topic) {
+  if (typeof topic !== "string" || !TOPIC_RE.test(topic)) {
+    return { ok: false, reason: "topic 必须是 32 字节的 base64url(43 个字符,字母数字 - _)" };
+  }
+  try {
+    if (Buffer.from(topic, "base64url").length !== 32) {
+      return { ok: false, reason: "topic 解码后不是 32 字节" };
+    }
+  } catch {
+    return { ok: false, reason: "topic 不是合法的 base64url" };
+  }
+  return { ok: true };
+}
+
 export const configDir = (home = homedir()) => join(home, ".pi", "agent", "pi-agent-team");
 
 const teamFile = (team, home) => join(configDir(home), `${team}.json`);
@@ -113,7 +140,7 @@ export function removeTeam(team, home = homedir()) {
  * 注意它**不启动任何东西**,也不验证 broker 是否可达 —— 创建是本地动作。
  * join 才负责连上。
  */
-export function createTeam({ team, url, token, labels = [], mode = "broker", seeds = [], home = homedir() }) {
+export function createTeam({ team, url, token, labels = [], mode = "broker", seeds = [], topic, home = homedir() }) {
   const nameCheck = validateTeamName(team);
   if (!nameCheck.ok) return { ok: false, reason: nameCheck.reason };
 
@@ -146,6 +173,14 @@ export function createTeam({ team, url, token, labels = [], mode = "broker", see
   // 不写空字段 —— 空数组是 truthy,读回来会覆盖调用方给的值
   const config = { mode, token: finalToken, createdAt: new Date().toISOString() };
   if (normalized) config.url = normalized;
+  // hyperswarm 的 topic 是配置的一部分:没有就生成并持久化(0600 一起写)。
+  // 从 punch URI 加入时 topic 已给定,直接存下来复用。
+  if (mode === "hyperswarm") {
+    const finalTopic = topic || generateTopic();
+    const vt = validateTopic(finalTopic);
+    if (!vt.ok) return { ok: false, reason: vt.reason };
+    config.topic = finalTopic;
+  }
   if (labels?.length) config.labels = labels;
   const cleanSeeds = (Array.isArray(seeds) ? seeds : String(seeds ?? "").split(","))
     .map((s) => String(s).trim())
@@ -162,7 +197,7 @@ export function createTeam({ team, url, token, labels = [], mode = "broker", see
  * 找不到本地配置时,允许用 url + token 现场加入并记下来 —— 否则
  * 每台机器都要先手工建配置文件,那就不像"join"了。
  */
-export function joinTeam({ team, url, token, mode, seeds, save = true, home = homedir() }) {
+export function joinTeam({ team, url, token, mode, seeds, topic, save = true, home = homedir() }) {
   const nameCheck = validateTeamName(team);
   if (!nameCheck.ok) return { ok: false, reason: nameCheck.reason };
 
@@ -178,22 +213,38 @@ export function joinTeam({ team, url, token, mode, seeds, save = true, home = ho
           : t(M.config.teamUnknownNeedsToken, { team }),
       };
     }
-    const created = createTeam({ team, url, token, mode, seeds, home });
+    const created = createTeam({ team, url, token, mode, seeds, topic, home });
     if (!created.ok) return created;
     return { ok: true, config: created.config, path: created.path, adopted: true };
+  }
+
+  // 旧版本的 hyperswarm 配置可能没有 topic —— 补一个并落盘,否则下次
+  // 启动过不了就绪检查。写回后 readTeam 就能暴露它。
+  if (existing.mode === "hyperswarm" && !existing.topic) {
+    existing.topic = generateTopic();
+    writeTeam(team, existing, home);
   }
 
   // 已有配置又被显式给了选项:更新它。
   //
   // mode/seeds 也要能改 —— 否则想把 team 从 broker 换成 mesh,
   // 只能 leave 再 join,而那会把 token 一起忘掉(它没写在别处)。
-  if (url || token || mode || seeds?.length) {
+  if (url || token || mode || topic || seeds?.length) {
     const config = { ...existing };
     if (url) config.url = normalizeUrl(url);
     if (token) config.token = token;
     if (mode) {
       if (!MODES.includes(mode)) return { ok: false, reason: t(M.config.modeInvalid, { modes: MODES.join(" / "), value: mode }) };
       config.mode = mode;
+    }
+    // 从 punch URI 加入:把 URI 携带的 topic 落盘复用。已有 hyperswarm
+    // 配置缺 topic(旧版本)时也补一个,否则下次启动过不了就绪检查。
+    if (topic) {
+      const vt = validateTopic(topic);
+      if (!vt.ok) return { ok: false, reason: vt.reason };
+      config.topic = topic;
+    } else if (config.mode === "hyperswarm" && !config.topic) {
+      config.topic = generateTopic();
     }
     if (seeds?.length) {
       const clean = (Array.isArray(seeds) ? seeds : String(seeds).split(","))

@@ -11,8 +11,11 @@
  *   team 级(写进 ~/.pi/agent/pi-agent-team/<team>.json):
  *     url      broker 地址
  *     token    认证
- *     mode     broker | mesh | swim
+ *     mode     broker | mesh | swim | hyperswarm
  *     seeds    mesh/swim 的种子地址
+ *     topic    hyperswarm 的 32 字节 DHT 能力凭证(base64url)
+ *
+ *   另外 `punch` 是一个输入别名(不落盘):它展开成 mode/topic/token。
  *
  *   session 级(只在本次运行有效,不落盘):
  *     name     节点名
@@ -29,13 +32,80 @@
 import { MODES } from "./mode.js";
 import { t } from "./i18n.js";
 import { M } from "./messages.js";
+import { validateTeamName, validateTopic } from "./team-config.js";
 
 /** team 级选项 → 落盘字段名 */
-const TEAM_KEYS = new Set(["url", "token", "mode", "seeds"]);
+const TEAM_KEYS = new Set(["url", "token", "mode", "seeds", "topic"]);
 /** session 级选项 → 只影响本次运行 */
 const SESSION_KEYS = new Set(["name", "labels", "port", "listen"]);
+/**
+ * 输入别名:既不是 team 配置也不是 session 配置,由一个值展开成多个字段。
+ * `punch` 展开成 mode/topic/token,所以它不落盘 —— 落盘的是展开后的字段。
+ */
+const INPUT_KEYS = new Set(["punch"]);
 
-export const ALL_KEYS = [...TEAM_KEYS, ...SESSION_KEYS];
+export const ALL_KEYS = [...TEAM_KEYS, ...SESSION_KEYS, ...INPUT_KEYS];
+
+/**
+ * 解析 punch URI:`punch://<name>/<topic>/<token>`。
+ *
+ * 格式由 backlog/02 与决策 punch-uri-two-secrets-no-host-key 固定:
+ *   <name>   非秘密的房间标签,复用 team 名校验
+ *   <topic>  32 字节能力凭证(base64url)
+ *   <token>  team token
+ *
+ * 唯一入口:任何看起来像 URI 的字符串都先过这里。方案不对或字段不合法
+ * 一律返回 { ok:false, reason },调用方据此拒绝 —— **绝不**把它降级成
+ * team 名或种子,否则一个手误的 URI 会变成“加入了一个叫 punch://… 的
+ * team”或者一个畸形的种子地址。
+ *
+ * @returns {{ ok:true, name:string, topic:string, token:string } | { ok:false, reason:string }}
+ */
+export function parsePunchUri(input) {
+  const raw = String(input ?? "").trim();
+  if (!raw) return { ok: false, reason: "punch URI 为空" };
+  // 方案必须**正好**是小写 punch:。写成 PUNCH:// 或 http:// 都不认 ——
+  // 宽松匹配会让一个外来的 URI 静默通过。
+  if (!raw.startsWith("punch:")) {
+    return { ok: false, reason: `不是 punch URI(应以 punch:// 开头),实际 "${raw}"` };
+  }
+  const m = /^punch:\/\/([^/]+)\/([^/]+)\/([^/?#\s]+)$/.exec(raw);
+  if (!m) {
+    return { ok: false, reason: "punch URI 应写成 punch://<team>/<topic>/<token>" };
+  }
+  const [, name, topic, token] = m;
+
+  const nt = validateTeamName(name);
+  if (!nt.ok) return { ok: false, reason: `team 名不合法:${nt.reason}` };
+
+  const tt = validateTopic(topic);
+  if (!tt.ok) return { ok: false, reason: `topic 不合法:${tt.reason}` };
+
+  // token 规则与 --token 一致(至少 16 位);额外要求不含路径分隔符,
+  // 否则 URI 会被切错段。
+  if (token.length < 16) return { ok: false, reason: "token 太短(至少 16 位)" };
+
+  return { ok: true, name, topic, token };
+}
+
+/** 生成规范的 punch URI 字符串。topic 接受 base64url 字符串或 32 字节 Buffer。 */
+export function buildPunchUri({ name, topic, token } = {}) {
+  const t =
+    topic instanceof Uint8Array || Buffer.isBuffer(topic)
+      ? Buffer.from(topic).toString("base64url")
+      : String(topic);
+  return `punch://${name}/${t}/${token}`;
+}
+
+/**
+ * 从环境变量解析 TEAM_PUNCH。脚本/容器的一条命令加入就靠它。
+ * 返回 null 表示没设;否则是 parsePunchUri 的结果。
+ */
+export function punchFromEnv(env = process.env) {
+  const raw = env?.TEAM_PUNCH;
+  if (raw == null || raw === "") return null;
+  return parsePunchUri(raw);
+}
 
 /**
  * 解析 `--key value` / `--key=value` / `key=value` 混排的参数。
@@ -116,9 +186,22 @@ export function parseLabels(raw) {
 export function validateOptions(values = {}) {
   const team = {};
   const session = {};
+  let punchName;
+
+  // punch 先展开,后面的显式选项就能覆盖它 —— TEAM_TOKEN/TEAM_MODE 是
+  // 可选覆盖,而不是第二个必填项(URI 已经带着 token 了)。
+  if (values.punch != null && values.punch !== "") {
+    const p = parsePunchUri(values.punch);
+    if (!p.ok) return { ok: false, reason: `punch URI 无效:${p.reason}` };
+    team.mode = "hyperswarm";
+    team.topic = p.topic;
+    team.token = p.token;
+    punchName = p.name;
+  }
 
   for (const [k, v] of Object.entries(values)) {
     if (v === "") continue; // 空值 = 没给,不要清掉已有配置
+    if (k === "punch") continue; // 已在上面展开
 
     if (k === "url") {
       if (!/^(https?|wss?):\/\//.test(v)) {
@@ -128,6 +211,10 @@ export function validateOptions(values = {}) {
     } else if (k === "token") {
       if (v.length < 16) return { ok: false, reason: t(M.options.tokenTooShort) };
       team.token = v;
+    } else if (k === "topic") {
+      const tt = validateTopic(v);
+      if (!tt.ok) return { ok: false, reason: tt.reason };
+      team.topic = v;
     } else if (k === "mode") {
       if (!MODES.includes(v)) {
         return { ok: false, reason: t(M.options.modeInvalid, { modes: MODES.join(" / "), value: v }) };
@@ -166,7 +253,10 @@ export function validateOptions(values = {}) {
     }
   }
 
-  return { ok: true, team, session };
+  const out = { ok: true, team, session };
+  // 只在真的给了 punch URI 时带上名字,供调用方知道该加入哪个 team
+  if (punchName !== undefined) out.punch = { name: punchName };
+  return out;
 }
 
 /**
@@ -175,12 +265,24 @@ export function validateOptions(values = {}) {
  * 放在这里而不是各个入口里,原因和解析一样:三个入口必须给出
  * 完全相同的判断,否则"命令能连上、工具连不上"这种问题会反复出现。
  */
-export function checkModeRequirements({ mode, url, seeds, token }) {
+export function checkModeRequirements({ mode, url, seeds, token, topic }) {
   if (!token) return { ok: false, reason: t(M.options.missingToken) };
 
   if (mode === "broker") {
     if (!url) {
       return { ok: false, reason: t(M.options.brokerNeedsUrl) };
+    }
+    return { ok: true };
+  }
+
+  if (mode === "hyperswarm") {
+    // topic 是 DHT 能力凭证,没有它无法加入房间。它由 /team create 生成
+    // 或由 punch URI 携带;这里不做种子提示 —— hyperswarm 没有种子。
+    if (!topic) {
+      return {
+        ok: false,
+        reason: "hyperswarm 模式需要 topic(32 字节 base64url)。用 /team create 自动生成,或 /team join <punch URI> 携带它。",
+      };
     }
     return { ok: true };
   }
