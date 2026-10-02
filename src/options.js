@@ -32,7 +32,7 @@
 import { MODES } from "./mode.js";
 import { t } from "./i18n.js";
 import { M } from "./messages.js";
-import { validateTeamName, validateTopic } from "./team-config.js";
+import { validateTeamName, validateToken, validateTopic } from "./team-config.js";
 
 /** team 级选项 → 落盘字段名 */
 const TEAM_KEYS = new Set(["url", "token", "mode", "seeds", "topic"]);
@@ -81,9 +81,10 @@ export function parsePunchUri(input) {
   const tt = validateTopic(topic);
   if (!tt.ok) return { ok: false, reason: `topic 不合法:${tt.reason}` };
 
-  // token 规则与 --token 一致(至少 16 位);额外要求不含路径分隔符,
-  // 否则 URI 会被切错段。
-  if (token.length < 16) return { ok: false, reason: "token 太短(至少 16 位)" };
+  // token 规则与 --token 一致:至少 16 位,且只含 URI-safe 字符。
+  // 这样它放回 buildPunchUri 永远能原样解析回来,也不会把 URI 切错段。
+  const tok = validateToken(token);
+  if (!tok.ok) return { ok: false, reason: tok.reason };
 
   return { ok: true, name, topic, token };
 }
@@ -209,7 +210,8 @@ export function validateOptions(values = {}) {
       }
       team.url = v;
     } else if (k === "token") {
-      if (v.length < 16) return { ok: false, reason: t(M.options.tokenTooShort) };
+      const vt = validateToken(v);
+      if (!vt.ok) return { ok: false, reason: vt.reason };
       team.token = v;
     } else if (k === "topic") {
       const tt = validateTopic(v);

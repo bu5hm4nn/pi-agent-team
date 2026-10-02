@@ -952,7 +952,15 @@ export default function (pi: ExtensionAPI) {
     }),
 
     renderCall(args, theme) {
-      const what = args?.punch ? String(args.punch) : String(args?.team ?? "?");
+      // 绝不回显完整 token —— 它会出现在可见的工具调用行里,被抄进日志。
+      // punch URI 只显示 room 标识和 topic,token 一段用 … 代替。
+      let what;
+      if (args?.punch) {
+        const p = parsePunchUri(args.punch);
+        what = p.ok ? `punch://${p.name}/${p.topic}/…` : "punch URI";
+      } else {
+        what = String(args?.team ?? "?");
+      }
       return new Text(theme.fg("toolTitle", theme.bold("team_join ")) + theme.fg("accent", what), 0, 0);
     },
 
