@@ -13,6 +13,7 @@ import {
   configDir,
   createTeam,
   generateToken,
+  generateTopic,
   joinTeam,
   leaveTeam,
   listTeams,
@@ -21,9 +22,11 @@ import {
   toSocketUrl,
   validateAgentName,
   validateTeamName,
+  validateTopic,
   writeTeam,
 } from "./team-config.js";
 import { setLocale } from "./i18n.js";
+import { buildPunchUri, parsePunchUri } from "./options.js";
 
 // 迁移后这里断言的 reason 文案来自 zh-Hans 目录;默认 locale 是 en-US,
 // 把 locale 钉在 zh-Hans 而不是改写断言。
@@ -120,6 +123,96 @@ test("create:重复调用不会覆盖已存在的配置", (t) => {
   createTeam({ team: "alpha", url: "http://other:9999", home });
   assert.equal(readTeam("alpha", home).token, first.token, "token 不该被换掉");
   assert.equal(readTeam("alpha", home).url, first.config.url);
+});
+
+// ---------------------------------------------------------------- hyperswarm topic
+
+test("topic:生成器产出 32 字节的规范 base64url", () => {
+  const topic = generateTopic();
+  assert.equal(topic.length, 43, "32 字节 base64url 无填充 = 43 字符");
+  assert.equal(validateTopic(topic).ok, true);
+});
+
+test("topic:校验拒非 32 字节、非 base64url", () => {
+  assert.equal(validateTopic(undefined).ok, false);
+  assert.equal(validateTopic("short").ok, false);
+  assert.equal(validateTopic("x".repeat(44)).ok, false);
+  assert.equal(validateTopic(Buffer.alloc(32, 1).toString("base64url")).ok, true);
+});
+
+test("create:hyperswarm 模式自动生成 topic 并持久化,文件仍 0600", (t) => {
+  const home = withHome(t);
+  const r = createTeam({ team: "hs", mode: "hyperswarm", home });
+  assert.equal(r.ok, true);
+  assert.equal(validateTopic(r.config.topic).ok, true, "应生成 32 字节 topic");
+
+  const cfg = readTeam("hs", home);
+  assert.equal(cfg.mode, "hyperswarm");
+  assert.equal(cfg.topic, r.config.topic, "readTeam 要暴露 topic");
+  assert.equal(statSync(join(configDir(home), "hs.json")).mode & 0o777, 0o600, "topic 是凭证,文件必须 0600");
+});
+
+test("create:broker/mesh 不产生 topic,配置不变", (t) => {
+  const home = withHome(t);
+  createTeam({ team: "b", url: URL_OK, home });
+  createTeam({ team: "m", mode: "mesh", home });
+  assert.equal("topic" in readTeam("b", home), false);
+  assert.equal("topic" in readTeam("m", home), false);
+});
+
+test("create:hyperswarm 复用调用方给的 topic(不重新生成)", (t) => {
+  const home = withHome(t);
+  const topic = generateTopic();
+  const r = createTeam({ team: "hs2", mode: "hyperswarm", topic, home });
+  assert.equal(r.ok, true);
+  assert.equal(r.config.topic, topic);
+  assert.equal(readTeam("hs2", home).topic, topic);
+});
+
+test("join:把 punch URI 带的 topic 落盘", (t) => {
+  const home = withHome(t);
+  const topic = generateTopic();
+  const token = generateToken();
+  const r = joinTeam({ team: "joined", mode: "hyperswarm", topic, token, home });
+
+  assert.equal(r.ok, true);
+  assert.equal(r.adopted, true);
+  const cfg = readTeam("joined", home);
+  assert.equal(cfg.topic, topic);
+  assert.equal(cfg.mode, "hyperswarm");
+  assert.equal(cfg.token, token);
+  assert.equal(statSync(join(configDir(home), "joined.json")).mode & 0o777, 0o600);
+});
+
+test("join:已有 hyperswarm 配置缺 topic(旧版本)时补一个", (t) => {
+  const home = withHome(t);
+  // 模拟旧版本:mode=hyperswarm 但没有 topic
+  writeTeam("old", { mode: "hyperswarm", token: generateToken() }, home);
+  assert.equal("topic" in readTeam("old", home), false);
+
+  const r = joinTeam({ team: "old", home });
+  assert.equal(r.ok, true);
+  assert.equal(validateTopic(readTeam("old", home).topic).ok, true, "应补上 topic");
+});
+
+test("round-trip:create(hyperswarm) → URI → parse → join 记录一致", (t) => {
+  const home = withHome(t);
+  const created = createTeam({ team: "round", mode: "hyperswarm", home });
+  assert.equal(created.ok, true);
+
+  const uri = buildPunchUri({ name: "round", topic: created.config.topic, token: created.token });
+  const parsed = parsePunchUri(uri);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.name, "round");
+  assert.equal(parsed.topic, created.config.topic);
+  assert.equal(parsed.token, created.token);
+
+  // 另一台机器:只有 URI
+  const home2 = withHome(t);
+  const joined = joinTeam({ team: parsed.name, mode: "hyperswarm", topic: parsed.topic, token: parsed.token, home: home2 });
+  assert.equal(joined.ok, true);
+  assert.equal(readTeam("round", home2).topic, created.config.topic);
+  assert.equal(readTeam("round", home2).token, created.token);
 });
 
 // ---------------------------------------------------------------- join
