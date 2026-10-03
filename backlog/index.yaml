@@ -86,7 +86,7 @@ phases:
       explicit override, then the shell locale (LC_ALL > LC_MESSAGES > LANG),
       then Intl; Pi exposes no locale API, so install detection is a documented
       non-goal. Code comments stay Chinese.
-    stories: ["13", "14", "15", "16", "17", "18"]
+    stories: ["13", "14", "15", "16", "17", "18", "19"]
 
 decisions:
   - id: phased-mesh-first
@@ -208,13 +208,14 @@ numbering:
   - "16"
   - "17"
   - "18"
+  - "19"
 
 # Urgency bands. Phase 1 is implemented; what remains is hardening (12), the
 # i18n wave (13-18) and Phases 2-3.
 urgency:
   now: []
   next: ["12", "13"]
-  later: ["04", "05", "07b", "09", "10", "11", "14", "15", "16", "17", "18"]
+  later: ["04", "05", "07b", "09", "10", "11", "14", "15", "16", "17", "18", "19"]
   only-if: []
 
 dependencies:
@@ -229,7 +230,7 @@ dependencies:
     - "09 -> 01, 02 — a session can only hold many rooms once one room works serverless"
     - "10 -> 09 — room-scoped tools need the room registry"
     - "11 -> 06, 09 — isolation is asserted against the token gate and the registry"
-    - "13 -> 01, 02, 03, 06, 07a, 08 — the i18n wave rebases on the whole Phase 1 output surface"
+    - "19 -> 13, 01, 02, 03, 06, 07a, 08 — the stack above i18n localizes the Phase 1 additions"
     - "14 -> 13 — the index.ts UI sinks call t()"
     - "15 -> 14 — dispatch output shares the catalog with the UI"
     - "16 -> 15 — session, config and transport errors share the same catalog"
@@ -343,7 +344,7 @@ stories:
     area: i18n
     status: queued
     file: backlog/13-i18n-core.md
-    depends_on: ["01", "02", "03", "06", "07a", "08"]
+    depends_on: []
     owner_decision: null
   - id: "14"
     title: "i18n — migrate the index.ts UI sinks"
@@ -379,4 +380,11 @@ stories:
     status: queued
     file: backlog/18-i18n-help-and-lang.md
     depends_on: ["17"]
+    owner_decision: null
+  - id: "19"
+    title: "i18n — localize the Phase 1 additions (above hyperswarm)"
+    area: i18n
+    status: queued
+    file: backlog/19-i18n-hyperswarm-strings.md
+    depends_on: ["13", "01", "02", "03", "06", "07a", "08"]
     owner_decision: null

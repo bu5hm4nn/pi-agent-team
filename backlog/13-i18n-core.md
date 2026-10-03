@@ -2,7 +2,7 @@
 
 - **Area:** i18n
 - **Status:** queued
-- **Depends on:** 01, 02, 03, 06, 07a, 08
+- **Depends on:** none (base-local; the Phase 1 additions are localized by 19)
 - **Owner decision:** none
 
 ## What

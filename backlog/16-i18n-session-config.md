@@ -7,10 +7,14 @@
 
 ## What
 
-Route the user-visible error and diagnostic strings in `src/session.js`,
-`src/team-config.js`, `src/mode.js`, `src/options.js` and the transports through
-`t()`. Third-party diagnostic text is wrapped, not translated. Command identifiers,
-wire codes and user content are left untouched.
+Route the user-visible error and diagnostic strings in the **pre-existing** modules
+— `src/session.js`, `src/team-config.js`, `src/mode.js`, `src/options.js`,
+`src/transport.js`, `src/transport-mesh.js`, `src/transport-swim.js` and
+`src/ws.js` — through `t()`. Third-party diagnostic text is wrapped, not translated.
+Command identifiers, wire codes and user content are left untouched.
+
+The hyperswarm additions (the transport, the punch URI, the token gate) do not exist
+on this branch; their strings are localized by story 19, above the Phase 1 work.
 
 ## Evidence
 
