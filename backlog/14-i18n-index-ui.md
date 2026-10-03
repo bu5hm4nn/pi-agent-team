@@ -12,6 +12,12 @@ Route the user-visible output produced in `index.ts` through `t()`: the
 `new Text(...)` renders and the status lines. Keys are namespaced by area
 (`notify.*`, `tool.*`, `status.*`).
 
+This story also wires the startup singleton: at extension load, call
+`setLocale(resolveLocale(process.env, { lang: <config lang if any> }))`, so the
+shell-locale chain actually takes effect (reviewer finding 1). The `--team-lang`
+flag is a Pi flag, not an env value; threading it into `env.teamLang` and the
+`/team lang` command belong to story 18.
+
 ## Evidence
 
 The council's string-scope review puts all extension-authored runtime output in

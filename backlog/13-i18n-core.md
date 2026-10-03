@@ -87,4 +87,6 @@ this story.
   across locales.
 - A `resolveLocale` unit test covering the full chain, POSIX normalization, the
   aliases and the unknown-language fallback.
-- The packaging test covers the three new files.
+- The packaging test covers the four new files (the guard scans `src/`
+  recursively, including `src/locales/`, so a locale file omitted from `files[]`
+  fails).

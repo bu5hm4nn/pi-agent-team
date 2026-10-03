@@ -34,4 +34,6 @@ the config `lang` field; README and configuration docs.
 
 - `/team lang` reports the effective locale and where it came from; setting it
   persists and applies on the next reload.
+- The `--team-lang` flag value is threaded into `resolveLocale`'s `env.teamLang`,
+  asserted by a test, so the top of the detection chain is not dead code.
 - Docs state plainly that model-facing text is intentionally not localized yet.
