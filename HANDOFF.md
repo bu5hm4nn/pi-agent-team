@@ -10,9 +10,11 @@
     mechanism, and the migrations.
   - **PR #1** `wave1-hyperswarm` -> `wave-i18n`: the Phase 1 holepunch mesh; a
     code-only diff, rebased onto each `wave-i18n` advance.
-- `main` (local) at `76c6c14`; `wave-i18n` at `8592b35`; `wave1-hyperswarm`
-  rebased onto it. **Nothing is merged or pushed to `main`.**
-- `git tag backup-hyperswarm-097fd2c` preserves the pre-reorder hyperswarm tip.
+- `main` (local) at `76c6c14`; `wave-i18n` at `1f7ce9e` (origin tip).
+  `wave1-hyperswarm` is **fully rebased onto `wave-i18n`** and carries the Phase 1
+  commits plus story `19`; tip `bf40f9a`. **Nothing is merged or pushed to `main`.**
+- `git tag backup-hyperswarm-097fd2c` and `git tag backup-wave1-46ada22` preserve
+  the pre-rebase tips (the old hyperswarm branch base and tip).
 - One upstream contribution attempt is planned; if rejected, the fork is renamed.
 
 ## What landed
@@ -28,8 +30,24 @@
   - `14` — the `index.ts` UI sinks routed through `t()`; a blocking plural-key leak
     and two further raw-key leaks were found in review and fixed.
   - `15` — `dispatch.js` output and `OPTION_HELP` migrated; 97 keys.
-  - The English added by `14` and `15` went through the three-seat council wording
-    review; the accepted corrections were applied.
+  - `16` — `session.js`, `team-config.js`, `mode.js`, `options.js` and the
+    pre-existing transports routed through `t()`; the Chinese-asserting tests
+    pinned to `zh-Hans`.
+  - `17` — the en-US catalog completed and the sink guard + dual-locale coverage
+    added; the roster/UI sink entries regraded.
+  - `18` — help/flag/command descriptions localized; `/team lang` and
+    `--team-lang` added; council wording applied.
+  - The English added by `14`, `15`, `17` and `18` went through the three-seat
+    council wording review; the accepted corrections were applied.
+- **Story `19`** (final step of the wave, on `wave1-hyperswarm` **after** the
+  rebase): the Phase 1 punch-URI and hyperswarm strings are localized. The rebase
+  replayed the seven Phase 1 commits onto `wave-i18n` (9 conflicts across
+  `mode.js`, `index.ts`, `dispatch.js`, `options.js`, `team-config.js`,
+  `team-config.test.js`), keeping the localized `t()`/`optionHelp()` structure and
+  integrating the punch-URI logic; `OPTION_HELP` was dropped in favour of
+  `optionHelp()` and the new option lines were folded into the `options.help`
+  catalog value. Story `19` then added **36 keys** to `messages.js` and both
+  catalogs and retired the six migrated team_join sink-guard entries.
 - The backlog gained story `12` (Phase 1 follow-ups) and the i18n wave (Phase 4,
   stories `13`-`19`).
 
@@ -50,8 +68,13 @@
 ## Verification evidence
 
 - `npm test` on `wave-i18n` (base): 312 tests, 306 pass, 0 fail, 6 skipped.
-- `npm test` on the combined `wave1-hyperswarm` tip: 362 tests, 356 pass, 0 fail,
-  6 skipped.
+- `npm test` on the rebased `wave1-hyperswarm` tip with story `19`: 378 tests,
+  372 pass, 0 fail, 6 skipped (the 6 skips are the SWIM sidecar cases; every
+  hyperswarm conformance and two-node test ran).
+- `node --test src/i18n-sink-guard.test.js`: 4 pass, 0 fail (no un-allowlisted
+  CJK, no stale entries). `node --test src/i18n.test.js`: 25 pass.
+- Both locales verified by hand on the punch-URI create/join and `/team mode`
+  paths: en-US renders English with no CJK, zh-Hans renders the Chinese catalog.
 - Every story was reviewed read-only with no blocking findings after its fixes; the
   English was reviewed by the council.
 - `e2e/conformance.js` is unchanged throughout.
@@ -60,7 +83,10 @@
 
 ## Next task
 
-Implement story `16` on `wave-i18n`: migrate `src/session.js`, `src/team-config.js`,
-`src/mode.js`, `src/options.js` and the pre-existing transports through `t()`, pin
-the Chinese-asserting tests to `zh-Hans`, then council-review the English and run the
-read-only reviewer. Then rebase `wave1-hyperswarm`. Stories `17`-`19` remain.
+Council-review the story-`19` English wording and run the read-only reviewer over
+`wave1-hyperswarm` (`1f7ce9e..bf40f9a`, including the replayed rebase); then the
+remaining i18n story is `20` (locale-aware model-facing payload, decision D1).
+Story `19`'s status is still `queued` in `backlog/19-i18n-hyperswarm-strings.md`
+and `backlog/index.yaml` — matching stories `17`/`18`; set all three to landed in
+the PR that merges the wave. Do not push, open the PR, merge, or delete branches
+without explicit authorization.
