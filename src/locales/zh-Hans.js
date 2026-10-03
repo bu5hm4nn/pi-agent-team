@@ -251,9 +251,9 @@ export const zhHans = Object.freeze({
   "ui.confirmBulkBody": "每个收件人都会跑一轮完整思考,消耗各自的 token。",
 
   "ui.menuViewMembers": "📋 查看成员",
-  "ui.menuSendToNode": "✉️ 发消息给某个节点",
+  "ui.menuSendToNode": "✉️  发消息给某个节点",
   "ui.menuBroadcast": "📢 群发",
-  "ui.menuManageLabels": "🏷️ 管理标签",
+  "ui.menuManageLabels": "🏷️  管理标签",
   "ui.menuTeamManage": "🔗 team 管理",
   "ui.menuConnectMode": "🧭 连接模式  (当前:{mode})",
   "ui.menuReplyStrategy": "🔔 回信策略  (当前:{reply})",

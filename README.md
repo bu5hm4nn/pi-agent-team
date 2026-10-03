@@ -209,8 +209,10 @@ Detection order, first hit wins:
 
 `/team lang` reports the effective locale and where it came from; `/team lang
 zh-Hans` (or `en-US`) sets it. A value set this way is saved in the current
-team's config and applies from the next reload — the flag and command help text
-is frozen when the extension loads.
+team's config and its runtime messages apply immediately — the flag and command
+help is registered when the extension loads, so it applies the next time Pi
+starts. With no team bound it is session-only; use `--team-lang` or `TEAM_LANG`
+to keep it across sessions.
 
 The text sent to the model — tool descriptions, the system-prompt team section,
 and the injected teammate-message templates — is intentionally **not** localized
