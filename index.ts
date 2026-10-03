@@ -1118,7 +1118,6 @@ export default function (pi: ExtensionAPI) {
         // 只有正在输入一个 -- 选项时才提示选项,免得打字时一直刷列表
         if (partial === "" || cur.startsWith("--")) {
           return completeToken([
-          return completeToken([
             { option: "--punch", description: t(M.ui.acPunch) },
             { option: "--url", description: t(M.ui.brokerAddress) },
             { option: "--token", description: "team token" },
