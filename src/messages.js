@@ -19,15 +19,58 @@
 const notify = Object.freeze({
   greeting: "notify.greeting",
   files: "notify.files",
+  sendFailed: "notify.sendFailed",
+  injectFailed: "notify.injectFailed",
+  remindFailed: "notify.remindFailed",
+  cancelled: "notify.cancelled",
+  modeUnavailable: "notify.modeUnavailable",
+  replaced: "notify.replaced",
+  payloadTooLarge: "notify.payloadTooLarge",
+  payloadTooLargeDetail: "notify.payloadTooLargeDetail",
+  payloadTooLargeHint: "notify.payloadTooLargeHint",
+  tokenRejected: "notify.tokenRejected",
+  tokenMissing: "notify.tokenMissing",
+  tokenLocalFingerprint: "notify.tokenLocalFingerprint",
+  tokenBrokerFingerprint: "notify.tokenBrokerFingerprint",
+  tokenFingerprintExplanation: "notify.tokenFingerprintExplanation",
+  tokenFingerprintFixIntro: "notify.tokenFingerprintFixIntro",
+  tokenFingerprintFixCommand: "notify.tokenFingerprintFixCommand",
+  tokenNone: "notify.tokenNone",
+  tokenUnknown: "notify.tokenUnknown",
+  connectionReplaced: "notify.connectionReplaced",
+  replyLegacyName: "notify.replyLegacyName",
+  replyUnknown: "notify.replyUnknown",
+  noTeamKnown: "notify.noTeamKnown",
+  noTeam: "notify.noTeam",
+  noPeersOnline: "notify.noPeersOnline",
+  noTeamsConfigured: "notify.noTeamsConfigured",
+  currentTeamMarker: "notify.currentTeamMarker",
+  teamCreated: "notify.teamCreated",
 });
 
 const reason = Object.freeze({
   offline: "reason.offline",
 });
 
+const status = Object.freeze({
+  replaced: "status.replaced",
+  line: "status.line",
+});
+
+const tool = Object.freeze({
+  moreLines: "tool.moreLines",
+  cardMoreLines: "tool.cardMoreLines",
+  notConnected: "tool.notConnected",
+  delivered: "tool.delivered",
+  noPeers: "tool.noPeers",
+  currentTeam: "tool.currentTeam",
+});
+
 export const M = Object.freeze({
   notify,
   reason,
+  status,
+  tool,
 });
 
 export default M;

@@ -30,6 +30,8 @@ import { hostname } from "node:os";
 import { Type } from "typebox";
 
 import { createBrokerTransport, CLOSE_REPLACED } from "./src/transport.js";
+import { setLocale, resolveLocale, t } from "./src/i18n.js";
+import { M } from "./src/messages.js";
 import { MODES, createTransport, modeReadiness, normalizeSeeds, resolveMode } from "./src/mode.js";
 import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, teamSize, applyRoster, TEAM_MESSAGE_TYPE } from "./src/session.js";
 import { normalizeReplyMode } from "./src/dispatch.js";
@@ -174,7 +176,7 @@ async function runIntentions(
           },
         });
         if (!okSent) {
-          const msg = "team:未连接,消息没发出去";
+          const msg = t(M.notify.sendFailed);
           notes.push(msg);
           ctx.ui.notify(msg, "error");
         }
@@ -192,7 +194,7 @@ async function runIntentions(
           );
         } catch (err) {
           const reason = (err as Error).message;
-          const msg = `team:注入失败 ${reason}`;
+          const msg = t(M.notify.injectFailed, { reason });
           notes.push(msg);
           ctx.ui.notify(msg, "error");
           // 发信人必须知道请求没进去,否则它会一直等回信
@@ -220,7 +222,7 @@ async function runIntentions(
             { triggerTurn: true },
           );
         } catch (err) {
-          ctx.ui.notify(`team:提醒失败 ${(err as Error).message}`, "error");
+          ctx.ui.notify(t(M.notify.remindFailed, { reason: (err as Error).message }), "error");
         }
         break;
       }
@@ -268,7 +270,7 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
         "每个收件人都会跑一轮完整思考,消耗各自的 token。",
       );
       if (!proceed) {
-        ctx.ui.notify("已取消", "info");
+        ctx.ui.notify(t(M.notify.cancelled), "info");
         return false;
       }
       // 确认后走同一条发送路径,不复制逻辑
@@ -317,7 +319,7 @@ function renderStatus() {
   const ui = ctxRef?.ui;
   if (!ui) return;
   if (connState === "replaced") {
-    ui.setStatus("team", `⚠️ team:${state.self || "?"} (被顶替)`);
+    ui.setStatus("team", t(M.status.replaced, { name: state.self || "?" }));
     return;
   }
   const icon =
@@ -328,7 +330,7 @@ function renderStatus() {
         : connState === "auth_failed"
           ? "🔑" // 和"网络断开"区分开:这是凭据问题,不是网络问题
           : "🔴";
-  ui.setStatus("team", `${icon} team:${state.self || "?"} (${teamSize(state)}) ${currentMode}`);
+  ui.setStatus("team", t(M.status.line, { icon, name: state.self || "?", count: teamSize(state), mode: currentMode }));
 }
 
 /**
@@ -339,19 +341,19 @@ function renderStatus() {
  * 该改哪一边 —— 指纹不是 token 本身,贴出来也不泄露什么。
  */
 function tokenFailureMessage(detail: { reason?: string; fingerprint?: string | null; url?: string }): string {
-  const mine = currentConfig?.token ? fingerprintOf(currentConfig.token) : "(无)";
+  const mine = currentConfig?.token ? fingerprintOf(currentConfig.token) : t(M.notify.tokenNone);
   if (detail.reason === "missing") {
-    return "team:broker 拒绝连接 —— 没有提供 token。用 /team join <team> --token <token> 补上。";
+    return t(M.notify.tokenMissing);
   }
   const lines = [
-    `team:broker 拒绝了这个 token(${detail.url ?? "broker"})。已停止重连 —— 重试多少次也不会变对。`,
+    t(M.notify.tokenRejected, { url: detail.url ?? "broker" }),
     "",
-    `  本机 token 指纹:  ${mine}`,
-    `  broker token 指纹:${detail.fingerprint ?? "(未知)"}`,
+    t(M.notify.tokenLocalFingerprint, { fingerprint: mine }),
+    t(M.notify.tokenBrokerFingerprint, { fingerprint: detail.fingerprint ?? t(M.notify.tokenUnknown) }),
     "",
-    "两个指纹不同,说明本机和 broker 用的不是同一个 token。",
-    "broker 启动时打印过它的指纹;改其中一边让它们一致:",
-    "  /team join <team> --token <broker 的 token>",
+    t(M.notify.tokenFingerprintExplanation),
+    t(M.notify.tokenFingerprintFixIntro),
+    t(M.notify.tokenFingerprintFixCommand),
   ];
   return lines.join("\n");
 }
@@ -408,7 +410,7 @@ function connectWith(
 
   const readiness = modeReadiness(resolved.mode, config);
   if (!readiness.ready) {
-    ctxRef?.ui.notify(`team:${resolved.mode} 模式不可用 —— ${readiness.reason}`, "error");
+    ctxRef?.ui.notify(t(M.notify.modeUnavailable, { mode: resolved.mode, reason: readiness.reason }), "error");
     return;
   }
 
@@ -435,27 +437,24 @@ function connectWith(
     connState = next as ConnState;
 
     if (next === "replaced") {
-      ctxRef?.ui.notify(
-        `team:节点名 "${state.self}" 已被另一个实例接管,本实例停止重连。换一个名字,或关掉那个实例。`,
-        "error",
-      );
+      ctxRef?.ui.notify(t(M.notify.replaced, { name: state.self }), "error");
     } else if (next === "auth_failed") {
       ctxRef?.ui.notify(tokenFailureMessage(detail as { reason?: string; fingerprint?: string | null; url?: string }), "error");
     } else if (next === "offline" && (detail as { reason?: string })?.reason === "payload_too_large") {
       const d = detail as { detail?: string | null };
       ctxRef?.ui.notify(
         [
-          "team:消息太大,对端拒绝了它并关闭了连接。",
-          d.detail ? `  对端说明:${d.detail}` : "",
+          t(M.notify.payloadTooLarge),
+          d.detail ? t(M.notify.payloadTooLargeDetail, { detail: d.detail }) : "",
           "",
-          "连接会自动重连,但这条消息不会补发 —— 请把内容拆短,或让对端自己读文件。",
+          t(M.notify.payloadTooLargeHint),
         ]
           .filter(Boolean)
           .join("\n"),
         "error",
       );
     } else if (next === "offline" && (detail as { code?: number })?.code === CLOSE_REPLACED) {
-      ctxRef?.ui.notify("team:连接被同名实例顶替", "warning");
+      ctxRef?.ui.notify(t(M.notify.connectionReplaced), "warning");
     }
     renderStatus();
   });
@@ -484,6 +483,11 @@ function connectWith(
 // ---------------------------------------------------------------- 导出
 
 export default function (pi: ExtensionAPI) {
+  // 启动期把 shell/环境的语言信号解析成单例 locale。team 配置里的 `lang`
+  // 字段属于 story 18(连同 /team lang),此刻还读不到,所以先只传
+  // process.env;检测链的其余部分照常生效。
+  setLocale(resolveLocale(process.env, {}));
+
   apiRef = pi;
 
   // ---- 卡片渲染器(entry 版:不进 LLM 上下文)
@@ -509,7 +513,7 @@ export default function (pi: ExtensionAPI) {
     const lines = body.split("\n");
     const shown = expanded ? lines : lines.slice(0, 6);
     let text = head + "\n" + shown.map((l) => `  ${l}`).join("\n");
-    if (!expanded && lines.length > 6) text += "\n" + theme.fg("dim", `  …还有 ${lines.length - 6} 行(展开查看)`);
+    if (!expanded && lines.length > 6) text += "\n" + theme.fg("dim", `  ${t(M.tool.cardMoreLines, { count: lines.length - 6 })}`);
     if (d?.reason) text += "\n" + theme.fg(m.color, `  ${d.reason}`);
 
     const box = new Box(0, 1, (t) => theme.bg("customMessageBg", t));
@@ -552,14 +556,10 @@ export default function (pi: ExtensionAPI) {
       if (mode) {
         state.reply = mode;
         if (legacy) {
-          ctx.ui.notify(
-            `team:回信策略的旧名字 "${rawReply}" 仍可用,但现在叫 "${mode}"。` +
-              `新写法:TEAM_REPLY=${mode} 或 --team-reply ${mode}`,
-            "warning",
-          );
+          ctx.ui.notify(t(M.notify.replyLegacyName, { old: rawReply, mode }), "warning");
         }
       } else {
-        ctx.ui.notify(`team:认不出的回信策略 "${rawReply}",可以用:off / remind / mirror`, "warning");
+        ctx.ui.notify(t(M.notify.replyUnknown, { value: rawReply }), "warning");
       }
     } else if (process.env.TEAM_QUIET === "1") {
       state.reply = "off";
@@ -604,8 +604,8 @@ export default function (pi: ExtensionAPI) {
     const known = listTeams();
     ctx.ui.notify(
       known.length
-        ? `team:未指定 team。本机已有:${known.join(", ")}。用 --team <名字> 或 /team join`
-        : "team:未加入任何 team。用 /team create 或 /team join",
+        ? t(M.notify.noTeamKnown, { known: known.join(", ") })
+        : t(M.notify.noTeam),
       "warning",
     );
   });
@@ -717,16 +717,16 @@ export default function (pi: ExtensionAPI) {
         theme.fg(bulk ? "warning" : "accent", bulk ? `📢 ${raw}` : `📤 ${raw}`);
       const lines = String(args?.text ?? "").split("\n");
       let text = head + "\n" + lines.slice(0, 4).map((l) => theme.fg("muted", `  ${l}`)).join("\n");
-      if (lines.length > 4) text += "\n" + theme.fg("dim", `  …还有 ${lines.length - 4} 行`);
+      if (lines.length > 4) text += "\n" + theme.fg("dim", `  ${t(M.tool.moreLines, { count: lines.length - 4 })}`);
       return new Text(text, 0, 0);
     },
 
     renderResult(result, _options, theme) {
       const d = result.details as { delivered?: boolean; to?: string; error?: string } | undefined;
       if (d?.delivered === false) {
-        return new Text(theme.fg("error", `⚠️ ${d.error ?? "未连接,消息没发出去"}`), 0, 0);
+        return new Text(theme.fg("error", `⚠️ ${d.error ?? t(M.tool.notConnected)}`), 0, 0);
       }
-      return new Text(theme.fg("success", `✓ 已投递给 ${d?.to ?? "?"}`), 0, 0);
+      return new Text(theme.fg("success", t(M.tool.delivered, { to: d?.to ?? "?" })), 0, 0);
     },
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -773,7 +773,7 @@ export default function (pi: ExtensionAPI) {
           "muted",
           list.length
             ? list.map((m) => `${m.name}${m.labels.length ? ` [${m.labels.join(" ")}]` : ""} @${m.host ?? "?"}`).join("\n")
-            : "(无其他节点)",
+            : t(M.tool.noPeers),
         ),
         0,
         0,
@@ -915,7 +915,7 @@ export default function (pi: ExtensionAPI) {
 
     renderCall(args, theme) {
       return new Text(
-        theme.fg("toolTitle", theme.bold("team_leave ")) + theme.fg("muted", String(args?.team ?? "(当前)")),
+        theme.fg("toolTitle", theme.bold("team_leave ")) + theme.fg("muted", String(args?.team ?? t(M.tool.currentTeam))),
         0,
         0,
       );
@@ -1092,18 +1092,18 @@ export default function (pi: ExtensionAPI) {
     let existing: { mode?: string; url?: string; token?: string } | null = null;
 
     if (isCreate) {
-      const t = await ctx.ui.input("新 team 名", "小写字母数字");
-      if (!t?.trim()) return null;
-      teamName = t.trim();
+      const name = await ctx.ui.input("新 team 名", "小写字母数字");
+      if (!name?.trim()) return null;
+      teamName = name.trim();
     } else {
       const known = listTeams();
       const NEW = "(输入新的 team)";
       const picked = await ctx.ui.select("加入哪个 team?", allowNewTeam ? [...known, NEW] : known);
       if (!picked) return null;
       if (picked === NEW) {
-        const t = await ctx.ui.input("team 名", "小写字母数字");
-        if (!t?.trim()) return null;
-        teamName = t.trim();
+        const name = await ctx.ui.input("team 名", "小写字母数字");
+        if (!name?.trim()) return null;
+        teamName = name.trim();
       } else {
         teamName = picked;
         existing = readTeam(picked);
@@ -1160,7 +1160,7 @@ export default function (pi: ExtensionAPI) {
       {
         label: "✉️  发消息给某个节点",
         run: async () => {
-          if (!list.length) return void ctx.ui.notify("没有其他节点在线", "warning");
+          if (!list.length) return void ctx.ui.notify(t(M.notify.noPeersOnline), "warning");
           const pick = await ctx.ui.select(
             "发给谁?",
             list.map((m) => `${m.name}${m.host ? `  —  ${m.host}` : ""}${m.labels?.length ? `  [${m.labels.join(" ")}]` : ""}`),
@@ -1177,7 +1177,7 @@ export default function (pi: ExtensionAPI) {
       {
         label: "📢 群发",
         run: async () => {
-          if (!list.length) return void ctx.ui.notify("没有其他节点在线", "warning");
+          if (!list.length) return void ctx.ui.notify(t(M.notify.noPeersOnline), "warning");
           const labels = knownLabels(state);
           const options = [
             `@default  —  默认组(${list.length} 个节点)`,
@@ -1233,7 +1233,9 @@ export default function (pi: ExtensionAPI) {
           if (action === "list") {
             const known = listTeams();
             return void ctx.ui.notify(
-              known.length ? known.map((t) => (t === currentTeam ? `${t}  ← 当前` : t)).join("\n") : "本机没有 team 配置",
+              known.length
+                ? known.map((name) => (name === currentTeam ? `${name}${t(M.notify.currentTeamMarker)}` : name)).join("\n")
+                : t(M.notify.noTeamsConfigured),
               "info",
             );
           }
@@ -1259,7 +1261,11 @@ export default function (pi: ExtensionAPI) {
             const tokenLine = r.lines.find((l) => /^[0-9a-f]{64}$/.test(l));
             ctx.ui.notify(
               tokenLine
-                ? `team "${args[0]}" 已创建并连接。\n\ntoken(只显示这一次,也在配置文件里):\n${tokenLine}\n\n${r.lines.find((l) => l.trim().startsWith("/team join"))?.trim() ?? ""}`
+                ? t(M.notify.teamCreated, {
+                    team: args[0],
+                    token: tokenLine,
+                    join: r.lines.find((l) => l.trim().startsWith("/team join"))?.trim() ?? "",
+                  })
                 : r.lines.join("\n"),
               "info",
             );
