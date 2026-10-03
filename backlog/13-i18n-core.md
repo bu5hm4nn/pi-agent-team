@@ -9,9 +9,15 @@
 
 A zero-dependency i18n foundation. `src/i18n.js` exports `t(key, params)`,
 `setLocale(locale)`, `getLocale()` and `resolveLocale(env)`; catalogs live in
-`src/locales/zh-Hans.js` (source, extracted from today's strings) and
-`src/locales/en-US.js`. The locale is a startup-frozen module singleton; tests use
+`src/locales/zh-Hans.js` (the source language) and `src/locales/en-US.js` (the base
+and default). The locale is a startup-frozen module singleton; tests use
 `setLocale()` or an isolated translator factory.
+
+This story establishes the mechanism and the guards only. Catalog content is added
+incrementally by stories 14-16 as each call site is migrated, in both locales at
+once, because the completeness test enforces key parity per commit: a `zh-Hans`
+entry without its reviewed `en-US` counterpart fails the build, so there is no
+window in which the English default can leak a raw key.
 
 ## Architecture — codes in, text at the edge
 
