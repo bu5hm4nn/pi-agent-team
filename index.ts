@@ -568,8 +568,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerFlag("team-mode", { description: t(M.flag.teamMode), type: "string" });
   pi.registerFlag("team-seeds", { description: t(M.flag.teamSeeds), type: "string" });
   pi.registerFlag("team-url", { description: t(M.flag.teamUrl), type: "string" });
-  pi.registerFlag("team-punch", { description: "用 punch URI 加入(等同 TEAM_PUNCH)", type: "string" });
-  pi.registerFlag("punch", { description: "team-punch 的别名", type: "string" });
+  pi.registerFlag("team-punch", { description: t(M.flag.teamPunch), type: "string" });
+  pi.registerFlag("punch", { description: t(M.flag.punch), type: "string" });
   pi.registerFlag("team-reply", { description: t(M.flag.teamReply), type: "string" });
   pi.registerFlag("team-lang", { description: t(M.flag.teamLang), type: "string" });
 
@@ -628,7 +628,7 @@ export default function (pi: ExtensionAPI) {
     const parsedPunch = flagPunch ? parsePunchUri(flagPunch) : punchFromEnv(process.env);
     if (parsedPunch) {
       if (!parsedPunch.ok) {
-        ctx.ui.notify(`team:punch URI 无效 —— ${parsedPunch.reason}`, "error");
+        ctx.ui.notify(t(M.ui.notifyPunchInvalid, { reason: parsedPunch.reason }), "error");
         return;
       }
       const r = joinTeam({
@@ -642,7 +642,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`team:${r.reason}`, "error");
         return;
       }
-      ctx.ui.notify(`team:从 punch URI 加入 "${parsedPunch.name}"(hyperswarm)`, "info");
+      ctx.ui.notify(t(M.ui.notifyPunchJoined, { name: parsedPunch.name }), "info");
       connectWith(parsedPunch.name, r.config);
       return;
     }
@@ -1119,11 +1119,11 @@ export default function (pi: ExtensionAPI) {
         if (partial === "" || cur.startsWith("--")) {
           return completeToken([
           return completeToken([
-            { option: "--punch", description: "punch://... 加入(一条 URI 就够)" },
+            { option: "--punch", description: t(M.ui.acPunch) },
             { option: "--url", description: t(M.ui.brokerAddress) },
             { option: "--token", description: "team token" },
             { option: "--mode", description: "broker | mesh | swim | hyperswarm" },
-            { option: "--topic", description: "hyperswarm 的 32 字节 topic" },
+            { option: "--topic", description: t(M.ui.acTopic) },
             { option: "--seeds", description: "host:port,..." },
             { option: "--name", description: t(M.ui.acNodeName) },
             { option: "--labels", description: t(M.ui.acLabels) },
@@ -1213,7 +1213,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     const modePick = await ctx.ui.select(t(M.ui.selectConnectMode), [
-      "hyperswarm  —  无服务器,DHT 打洞(默认;用 punch URI 加入)",
+      t(M.ui.modeHyperswarmDefault),
       t(M.ui.modeBrokerRecommend),
       t(M.ui.modeMeshNoCenter),
       t(M.ui.modeSwimMembers),
@@ -1225,7 +1225,7 @@ export default function (pi: ExtensionAPI) {
     // 额外输入 —— token 和 topic 会自动生成。
     if (mode === "hyperswarm") {
       if (isCreate) return [teamName, "--mode", mode];
-      const uri = await ctx.ui.input("punch URI", "punch://<team>/<topic>/<token>");
+      const uri = await ctx.ui.input(t(M.ui.inputPunchUri), "punch://<team>/<topic>/<token>");
       if (!uri?.trim()) return null;
       return [uri.trim()];
     }
@@ -1433,7 +1433,7 @@ export default function (pi: ExtensionAPI) {
             const punchLine = r.lines.find((l) => l.startsWith("punch://"));
             if (punchLine) {
               return void ctx.ui.notify(
-                `team "${args[0]}" 已创建并连接。\n\npunch URI(复制这一条到新机器):\n${punchLine}\n\n新机器一条命令:\nTEAM_PUNCH='${punchLine}' pi`,
+                t(M.ui.notifyPunchCreated, { team: args[0], punchUri: punchLine }),
                 "info",
               );
             }
@@ -1455,7 +1455,7 @@ export default function (pi: ExtensionAPI) {
         label: t(M.ui.menuConnectMode, { mode: currentMode }),
         run: async () => {
           const pick = await ctx.ui.select(t(M.ui.selectConnectMode), [
-            "hyperswarm  —  无服务器,DHT 打洞,用 punch URI 加入",
+            t(M.ui.modeHyperswarmJoin),
             t(M.ui.modeBrokerNeedUrl),
             t(M.ui.modeMeshNeedSeeds),
             t(M.ui.modeSwimNeedSeeds),

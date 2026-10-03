@@ -63,23 +63,23 @@ export const ALL_KEYS = [...TEAM_KEYS, ...SESSION_KEYS, ...INPUT_KEYS];
  */
 export function parsePunchUri(input) {
   const raw = String(input ?? "").trim();
-  if (!raw) return { ok: false, reason: "punch URI 为空" };
+  if (!raw) return { ok: false, reason: t(M.options.punchEmpty) };
   // 方案必须**正好**是小写 punch:。写成 PUNCH:// 或 http:// 都不认 ——
   // 宽松匹配会让一个外来的 URI 静默通过。
   if (!raw.startsWith("punch:")) {
-    return { ok: false, reason: `不是 punch URI(应以 punch:// 开头),实际 "${raw}"` };
+    return { ok: false, reason: t(M.options.punchScheme, { value: raw }) };
   }
   const m = /^punch:\/\/([^/]+)\/([^/]+)\/([^/?#\s]+)$/.exec(raw);
   if (!m) {
-    return { ok: false, reason: "punch URI 应写成 punch://<team>/<topic>/<token>" };
+    return { ok: false, reason: t(M.options.punchFormat) };
   }
   const [, name, topic, token] = m;
 
   const nt = validateTeamName(name);
-  if (!nt.ok) return { ok: false, reason: `team 名不合法:${nt.reason}` };
+  if (!nt.ok) return { ok: false, reason: t(M.options.punchTeamNameInvalid, { reason: nt.reason }) };
 
   const tt = validateTopic(topic);
-  if (!tt.ok) return { ok: false, reason: `topic 不合法:${tt.reason}` };
+  if (!tt.ok) return { ok: false, reason: t(M.options.punchTopicInvalid, { reason: tt.reason }) };
 
   // token 规则与 --token 一致:至少 16 位,且只含 URI-safe 字符。
   // 这样它放回 buildPunchUri 永远能原样解析回来,也不会把 URI 切错段。
@@ -193,7 +193,7 @@ export function validateOptions(values = {}) {
   // 可选覆盖,而不是第二个必填项(URI 已经带着 token 了)。
   if (values.punch != null && values.punch !== "") {
     const p = parsePunchUri(values.punch);
-    if (!p.ok) return { ok: false, reason: `punch URI 无效:${p.reason}` };
+    if (!p.ok) return { ok: false, reason: t(M.options.punchInvalid, { reason: p.reason }) };
     team.mode = "hyperswarm";
     team.topic = p.topic;
     team.token = p.token;
@@ -283,7 +283,7 @@ export function checkModeRequirements({ mode, url, seeds, token, topic }) {
     if (!topic) {
       return {
         ok: false,
-        reason: "hyperswarm 模式需要 topic(32 字节 base64url)。用 /team create 自动生成,或 /team join <punch URI> 携带它。",
+        reason: t(M.options.hyperswarmTopicRequired),
       };
     }
     return { ok: true };

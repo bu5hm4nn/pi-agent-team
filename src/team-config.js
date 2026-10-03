@@ -45,8 +45,7 @@ export function validateToken(token) {
   if (typeof token !== "string" || !TOKEN_RE.test(token)) {
     return {
       ok: false,
-      reason:
-        "token 至少 16 位,且只能用字母、数字、- 和 _(不能有空格、斜杠或其它符号;openssl rand -hex 32 生成的 64 位 hex 正好符合)",
+      reason: t(M.config.tokenInvalid),
     };
   }
   return { ok: true };
@@ -67,14 +66,14 @@ const TOPIC_RE = /^[A-Za-z0-9_-]{43}$/;
 /** 校验 topic:必须是 32 字节的 base64url(接受生成器产出的规范形式) */
 export function validateTopic(topic) {
   if (typeof topic !== "string" || !TOPIC_RE.test(topic)) {
-    return { ok: false, reason: "topic 必须是 32 字节的 base64url(43 个字符,字母数字 - _)" };
+    return { ok: false, reason: t(M.config.topicInvalidCharset) };
   }
   try {
     if (Buffer.from(topic, "base64url").length !== 32) {
-      return { ok: false, reason: "topic 解码后不是 32 字节" };
+      return { ok: false, reason: t(M.config.topicInvalidLength) };
     }
   } catch {
-    return { ok: false, reason: "topic 不是合法的 base64url" };
+    return { ok: false, reason: t(M.config.topicInvalidBase64) };
   }
   return { ok: true };
 }
@@ -83,9 +82,9 @@ export function validateTopic(topic) {
  * join 一个 hyperswarm team 却没有 topic 时的统一拒绝文案。
  *
  * 指向 punch URI,因为那是正常加入路径;create 才负责生成新房间。
+ * 做成函数而不是常量:locale 是启动期才选定的,常量会冻在 import 时的语言。
  */
-const HYPERWARM_TOPIC_REQUIRED =
-  "hyperswarm 模式需要 topic,否则会进入一个和 team 不同的 DHT 房间。用 /team join <punch URI> 带着 topic 加入,或先 /team create <team> 让创建方生成一条 punch URI。";
+const hyperwarmTopicRequired = () => t(M.config.hyperswarmTopicRequired);
 
 export const configDir = (home = homedir()) => join(home, ".pi", "agent", "pi-agent-team");
 
@@ -235,7 +234,7 @@ export function joinTeam({ team, url, token, mode, seeds, topic, save = true, ho
     // 加入一个 hyperswarm 房间必须带着 topic。没有 topic 就自动生成一个
     // 会把这台机器放进另一个 DHT 房间,而且症状是静默的:看起来加入了
     // team,实际谁也发现不了谁。创建房间是 /team create 的事。
-    if (mode === "hyperswarm" && !topic) return { ok: false, reason: HYPERWARM_TOPIC_REQUIRED };
+    if (mode === "hyperswarm" && !topic) return { ok: false, reason: hyperwarmTopicRequired() };
     if (!token) {
       const known = listTeams(home);
       return {
@@ -254,7 +253,7 @@ export function joinTeam({ team, url, token, mode, seeds, topic, save = true, ho
   // 那会把节点放进一个和团队不同的 DHT 房间。要加入就带上 punch URI 里的
   // topic;想创建新房间用 /team create。
   if ((mode ?? existing.mode) === "hyperswarm" && !(topic ?? existing.topic)) {
-    return { ok: false, reason: HYPERWARM_TOPIC_REQUIRED };
+    return { ok: false, reason: hyperwarmTopicRequired() };
   }
 
   // 已有配置又被显式给了选项:更新它。

@@ -39,6 +39,8 @@ import { createHmac } from "node:crypto";
 import { FrameReader, encodeFrame, closeFrame, pingFrame, pongFrame, tokenEquals } from "./ws.js";
 import { createEmitter } from "./transport.js";
 import { resolveTargets } from "./transport-mesh.js";
+import { t } from "./i18n.js";
+import { M } from "./messages.js";
 
 const HEARTBEAT_MS = 15_000;
 /** join 之后最多等这么久 announce 完成;超时也上线,至少本地可用。 */
@@ -92,14 +94,12 @@ export function loadHyperswarm() {
 export function hyperswarmAvailable(loader = loadHyperswarm) {
   try {
     const impl = loader();
-    if (!impl) throw new Error("模块为空");
+    if (!impl) throw new Error(t(M.transport.hyperswarmEmptyModule));
     return { ok: true, Hyperswarm: impl };
   } catch (err) {
     return {
       ok: false,
-      reason:
-        `hyperswarm 模式需要可选的 hyperswarm 依赖,但它无法加载:${err?.message ?? err}。` +
-        "安装:npm i hyperswarm。broker/mesh/swim 不受影响。",
+      reason: t(M.transport.hyperswarmMissingDep, { error: err?.message ?? err }),
     };
   }
 }
@@ -519,15 +519,14 @@ export function createHyperswarmTransport({
         state = "offline";
         bus.emit("state", "offline", {
           reason: "token_missing",
-          message:
-            "hyperswarm 模式需要 team token(与其它模式共享的密钥)。缺少它就无法证明成员身份,拒绝加入。",
+          message: t(M.transport.hyperswarmMissingToken),
         });
         return;
       }
       setState("connecting");
 
       if (!resolvedTopic) {
-        setState("offline", { reason: "invalid_topic", message: "需要一个 32 字节 topic(Buffer / base64url / hex)" });
+        setState("offline", { reason: "invalid_topic", message: t(M.transport.hyperswarmBadTopic) });
         return;
       }
 
@@ -538,7 +537,7 @@ export function createHyperswarmTransport({
         } catch (err) {
           setState("offline", {
             reason: "dependency_missing",
-            message: `无法加载 hyperswarm:${err?.message ?? err}`,
+            message: t(M.transport.hyperswarmLoadFailed, { error: err?.message ?? err }),
           });
           return;
         }
