@@ -33,6 +33,7 @@ import { createBrokerTransport, CLOSE_REPLACED } from "./src/transport.js";
 import { setLocale, getLocale, resolveLocale, resolveLocaleInfo, startupLocaleEnv, classifyLocale, SUPPORTED_LOCALES, t } from "./src/i18n.js";
 import { M } from "./src/messages.js";
 import { MODES, createTransport, modeReadiness, normalizeSeeds, resolveMode } from "./src/mode.js";
+import { parsePunchUri, punchFromEnv } from "./src/options.js";
 import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, teamSize, applyRoster, TEAM_MESSAGE_TYPE } from "./src/session.js";
 import { normalizeReplyMode } from "./src/dispatch.js";
 import { createTeam, joinTeam, leaveTeam, listTeams, readTeam, toSocketUrl, writeTeam } from "./src/team-config.js";
@@ -61,7 +62,7 @@ let transport: ReturnType<typeof createBrokerTransport> | null = null;
 let currentMode: string = "broker";
 let connState: ConnState = "offline";
 let currentTeam: string | null = null;
-let currentConfig: { url: string; token: string; labels?: string[] } | null = null;
+let currentConfig: { url?: string; token: string; labels?: string[]; mode?: string; seeds?: string[]; topic?: string } | null = null;
 
 let ctxRef: ExtensionContext | null = null;
 let apiRef: ExtensionAPI | null = null;
@@ -385,7 +386,7 @@ function fingerprintOf(token: string): string {
 
 function connectWith(
   team: string | null,
-  config: { url?: string; token: string; labels?: string[]; mode?: string; seeds?: string[] },
+  config: { url?: string; token: string; labels?: string[]; mode?: string; seeds?: string[]; topic?: string },
   /**
    * 会话级选项,来自这次调用的参数,覆盖启动时的值。
    *
@@ -567,6 +568,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerFlag("team-mode", { description: t(M.flag.teamMode), type: "string" });
   pi.registerFlag("team-seeds", { description: t(M.flag.teamSeeds), type: "string" });
   pi.registerFlag("team-url", { description: t(M.flag.teamUrl), type: "string" });
+  pi.registerFlag("team-punch", { description: t(M.flag.teamPunch), type: "string" });
+  pi.registerFlag("punch", { description: t(M.flag.punch), type: "string" });
   pi.registerFlag("team-reply", { description: t(M.flag.teamReply), type: "string" });
   pi.registerFlag("team-lang", { description: t(M.flag.teamLang), type: "string" });
 
@@ -615,6 +618,34 @@ export default function (pi: ExtensionAPI) {
     const token = process.env.TEAM_TOKEN ?? "";
     const modeFlag = (pi.getFlag("team-mode") as string) ?? process.env.TEAM_MODE ?? "";
     const seedsFlag = (pi.getFlag("team-seeds") as string) ?? process.env.TEAM_SEEDS ?? "";
+
+    // ── TEAM_PUNCH:<uri> ──
+    // 一台全新机器的一条命令加入路径:URI 里已经有 topic 和 token,
+    // 所以不需要 seeds / url / TEAM_TOKEN。TEAM_TOKEN 仍可作为可选
+    // 覆盖(不是第二个必填项)。TEAM_PUNCH 优先于 TEAM。
+    const flagPunch =
+      (pi.getFlag("punch") as string) ?? (pi.getFlag("team-punch") as string) ?? "";
+    const parsedPunch = flagPunch ? parsePunchUri(flagPunch) : punchFromEnv(process.env);
+    if (parsedPunch) {
+      if (!parsedPunch.ok) {
+        ctx.ui.notify(t(M.ui.notifyPunchInvalid, { reason: parsedPunch.reason }), "error");
+        return;
+      }
+      const r = joinTeam({
+        team: parsedPunch.name,
+        token: token || parsedPunch.token, // TEAM_TOKEN 可选覆盖
+        topic: parsedPunch.topic,
+        mode: "hyperswarm",
+        save: false,
+      });
+      if (!r.ok) {
+        ctx.ui.notify(`team:${r.reason}`, "error");
+        return;
+      }
+      ctx.ui.notify(t(M.ui.notifyPunchJoined, { name: parsedPunch.name }), "info");
+      connectWith(parsedPunch.name, r.config);
+      return;
+    }
 
     if (team) {
       // joinTeam 只读本地配置 / 或记录新配置,不涉及网络
@@ -889,18 +920,23 @@ export default function (pi: ExtensionAPI) {
     name: "team_join",
     label: "Team Join",
     description:
-      "加入一个 team 并连接。team 已在本机配置里时只需 team 名;首次加入需要 token,以及 url(broker 模式)或 seeds(mesh/swim)。" +
-      "改 mode 或 seeds 也用它 —— 已有的 url/token 会保留,不会被清掉。",
+      "加入一个 team 并连接。首选方式是把创建时打印的 punch URI 传给 punch 参数 —— 一条 URI 就够,不需要 team/token/url/seeds。" +
+      "也可以用 team 名:已在本机配置里时只需 team 名;首次加入需要 token,以及 url(broker)或 seeds(mesh/swim)。" +
+      "改 mode 或 seeds 也用它 —— 已有的 url/token 会保留。",
     promptSnippet:
-      "team_join(team, token?, url?, mode?, seeds?, name?, labels?, port?) — 加入或重新配置 team",
+      "team_join(punch?) 或 team_join(team, token?, url?, mode?, seeds?, name?, labels?, port?) — 加入或重新配置 team",
     parameters: Type.Object({
-      team: Type.String({ description: "team 名(小写字母数字)" }),
-      token: Type.Optional(Type.String({ description: "team token,首次加入时必需" })),
+      team: Type.Optional(Type.String({ description: "team 名(小写字母数字)。给了 punch URI 时可省略" })),
+      punch: Type.Optional(
+        Type.String({ description: "punch://<team>/<topic>/<token> —— 创建时打印的 URI。给了它就不需要 team/token/url/seeds" }),
+      ),
+      token: Type.Optional(Type.String({ description: "team token,首次加入时必需(用 punch URI 时由 URI 携带)" })),
       url: Type.Optional(Type.String({ description: "broker 地址,broker 模式必需,例如 http://100.64.0.1:8787" })),
       mode: Type.Optional(
-        Type.Union([Type.Literal("broker"), Type.Literal("mesh"), Type.Literal("swim")], {
-          description: "投递模式。broker(默认)经中转;mesh/swim 节点直连,需要 seeds",
-        }),
+        Type.Union(
+          [Type.Literal("broker"), Type.Literal("mesh"), Type.Literal("swim"), Type.Literal("hyperswarm")],
+          { description: "投递模式。broker 经中转;mesh/swim 节点直连,需要 seeds;hyperswarm 无服务器,用 punch URI 加入" },
+        ),
       ),
       seeds: Type.Optional(
         Type.Array(Type.String(), { description: "mesh/swim 的种子地址,形如 100.64.0.1:19801" }),
@@ -916,11 +952,16 @@ export default function (pi: ExtensionAPI) {
     }),
 
     renderCall(args, theme) {
-      return new Text(
-        theme.fg("toolTitle", theme.bold("team_join ")) + theme.fg("accent", String(args?.team ?? "?")),
-        0,
-        0,
-      );
+      // 绝不回显完整 token —— 它会出现在可见的工具调用行里,被抄进日志。
+      // punch URI 只显示 room 标识和 topic,token 一段用 … 代替。
+      let what;
+      if (args?.punch) {
+        const p = parsePunchUri(args.punch);
+        what = p.ok ? `punch://${p.name}/${p.topic}/…` : "punch URI";
+      } else {
+        what = String(args?.team ?? "?");
+      }
+      return new Text(theme.fg("toolTitle", theme.bold("team_join ")) + theme.fg("accent", what), 0, 0);
     },
 
     renderResult(result, _options, theme) {
@@ -931,7 +972,8 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       // 走和 /team join 同一个 dispatch —— 工具的选项必须和命令的选项
       // 完全一致,否则模型能设的东西和人能设的东西会分叉。
-      const args: string[] = [params.team];
+      // punch URI 作为位置参数传入,dispatch 会解析出 team/topic/token。
+      const args: string[] = params.punch ? [params.punch] : params.team ? [params.team] : [];
       if (params.url) args.push("--url", params.url);
       if (params.token) args.push("--token", params.token);
       if (params.mode) args.push("--mode", params.mode);
@@ -1076,9 +1118,12 @@ export default function (pi: ExtensionAPI) {
         // 只有正在输入一个 -- 选项时才提示选项,免得打字时一直刷列表
         if (partial === "" || cur.startsWith("--")) {
           return completeToken([
+          return completeToken([
+            { option: "--punch", description: t(M.ui.acPunch) },
             { option: "--url", description: t(M.ui.brokerAddress) },
             { option: "--token", description: "team token" },
-            { option: "--mode", description: "broker | mesh | swim" },
+            { option: "--mode", description: "broker | mesh | swim | hyperswarm" },
+            { option: "--topic", description: t(M.ui.acTopic) },
             { option: "--seeds", description: "host:port,..." },
             { option: "--name", description: t(M.ui.acNodeName) },
             { option: "--labels", description: t(M.ui.acLabels) },
@@ -1088,7 +1133,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (sub === "mode") {
-        return completeToken(["broker", "mesh", "swim"].map((m) => ({ option: m })));
+        return completeToken(["broker", "mesh", "swim", "hyperswarm"].map((m) => ({ option: m })));
       }
 
       if (sub === "reply" || sub === "announce") {
@@ -1168,12 +1213,22 @@ export default function (pi: ExtensionAPI) {
     }
 
     const modePick = await ctx.ui.select(t(M.ui.selectConnectMode), [
+      t(M.ui.modeHyperswarmDefault),
       t(M.ui.modeBrokerRecommend),
       t(M.ui.modeMeshNoCenter),
       t(M.ui.modeSwimMembers),
     ]);
     if (!modePick) return null;
     const mode = modePick.split(" ")[0];
+
+    // hyperswarm 加入靠 punch URI,不需要 url/seeds。create 时不需要
+    // 额外输入 —— token 和 topic 会自动生成。
+    if (mode === "hyperswarm") {
+      if (isCreate) return [teamName, "--mode", mode];
+      const uri = await ctx.ui.input(t(M.ui.inputPunchUri), "punch://<team>/<topic>/<token>");
+      if (!uri?.trim()) return null;
+      return [uri.trim()];
+    }
 
     const args = [teamName, "--mode", mode];
 
@@ -1373,7 +1428,15 @@ export default function (pi: ExtensionAPI) {
             if (!args) return;
             const r = await invoke({ sub: "create", args }, ctx);
             if (!r.ok) return void ctx.ui.notify(r.error!, "error");
-            // token 只显示这一次,单独提示,避免被后续 notify 冲掉
+            // hyperswarm:要复制的是 punch URI(它带着 topic 和 token)。
+            // broker/mesh:token 只显示这一次,单独提示,免得被后续 notify 冲掉。
+            const punchLine = r.lines.find((l) => l.startsWith("punch://"));
+            if (punchLine) {
+              return void ctx.ui.notify(
+                t(M.ui.notifyPunchCreated, { team: args[0], punchUri: punchLine }),
+                "info",
+              );
+            }
             const tokenLine = r.lines.find((l) => /^[0-9a-f]{64}$/.test(l));
             ctx.ui.notify(
               tokenLine
@@ -1392,6 +1455,7 @@ export default function (pi: ExtensionAPI) {
         label: t(M.ui.menuConnectMode, { mode: currentMode }),
         run: async () => {
           const pick = await ctx.ui.select(t(M.ui.selectConnectMode), [
+            t(M.ui.modeHyperswarmJoin),
             t(M.ui.modeBrokerNeedUrl),
             t(M.ui.modeMeshNeedSeeds),
             t(M.ui.modeSwimNeedSeeds),

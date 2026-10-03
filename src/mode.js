@@ -8,10 +8,12 @@
  * 模式之间分叉,因为只有一套测试。
  *
  * ── 需要什么配置 ──
- *   broker  url(broker 地址)        必填
- *   mesh    seeds(至少一个)         可选但强烈建议;没有种子的节点
- *                                   只能等别人连它
- *   swim    seeds + 边车可执行文件   边车缺失是硬失败,不静默降级
+ *   broker     url(broker 地址)        必填
+ *   mesh       seeds(至少一个)         可选但强烈建议;没有种子的节点
+ *                                      只能等别人连它
+ *   swim       seeds + 边车可执行文件   边车缺失是硬失败,不静默降级
+ *   hyperswarm topic(32 字节)         必填;topic 由 story 02 生成,
+ *                                      这里只接受已解析好的值
  *
  * 所有模式都要 token。
  */
@@ -21,8 +23,9 @@ import { createMeshTransport } from "./transport-mesh.js";
 import { createSwimTransport, sidecarAvailable } from "./transport-swim.js";
 import { t } from "./i18n.js";
 import { M } from "./messages.js";
+import { createHyperswarmTransport, hyperswarmAvailable, loadHyperswarm, normalizeTopic } from "./transport-hyperswarm.js";
 
-export const MODES = ["broker", "mesh", "swim"];
+export const MODES = ["broker", "mesh", "swim", "hyperswarm"];
 
 /** 从配置和环境变量解析出模式 */
 export function resolveMode({ config = {}, env = process.env } = {}) {
@@ -37,10 +40,11 @@ export function resolveMode({ config = {}, env = process.env } = {}) {
  * 创建 transport。
  *
  * @param {{
- *   mode: "broker"|"mesh"|"swim",
+ *   mode: "broker"|"mesh"|"swim"|"hyperswarm",
  *   config: { url?: string, token: string, seeds?: string[], labels?: string[] },
  *   listenHost?: string, listenPort?: number, advertiseHost?: string|null,
  *   sidecarPath?: string|null,
+ *   hyperswarmLoader?: () => unknown,   // 仅测试用:模拟缺少可选原生依赖
  * }} opts
  */
 export function createTransport({
@@ -50,6 +54,7 @@ export function createTransport({
   listenPort = 0,
   advertiseHost = null,
   sidecarPath = null,
+  hyperswarmLoader = loadHyperswarm,
 }) {
   const token = config?.token;
   if (!token) return { ok: false, reason: t(M.mode.missingToken) };
@@ -99,6 +104,29 @@ export function createTransport({
       };
     }
 
+    case "hyperswarm": {
+      // topic 必须是能解码成 32 字节的值(Buffer 或 base64url/hex)。
+      // 只判 truthy 会让一个拼错的 topic 到 start() 才失败。
+      const resolvedTopic = normalizeTopic(config.topic);
+      if (!resolvedTopic) {
+        return {
+          ok: false,
+          reason: t(M.mode.hyperswarmNeedsTopic),
+        };
+      }
+      // 可选原生依赖缺失时明确失败,不拖垮其它模式。
+      const dep = hyperswarmAvailable(hyperswarmLoader);
+      if (!dep.ok) return { ok: false, reason: dep.reason };
+      return {
+        ok: true,
+        transport: createHyperswarmTransport({
+          topic: resolvedTopic,
+          token,
+          HyperswarmImpl: dep.Hyperswarm,
+        }),
+      };
+    }
+
     default:
       return { ok: false, reason: t(M.mode.unknown, { mode }) };
   }
@@ -134,6 +162,12 @@ export function modeReadiness(mode, config = {}, sidecarPath = null) {
       return sidecarAvailable(sidecarPath)
         ? { ready: true }
         : { ready: false, reason: t(M.mode.swimSidecarNotFound) };
+    case "hyperswarm":
+      // token 已在函数开头查过;topic 同样必需。用 normalizeTopic 兼容
+      // Buffer/Uint8Array(测试与调用方都可能直接给字节)。
+      return normalizeTopic(config.topic)
+        ? { ready: true }
+        : { ready: false, reason: t(M.mode.hyperswarmNeedsTopicShort) };
     default:
       return { ready: false, reason: t(M.mode.unknownNoQuote, { mode }) };
   }

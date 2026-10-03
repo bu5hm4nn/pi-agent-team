@@ -32,6 +32,60 @@ const TEAM_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 /** 生成 token:32 字节 = 64 hex,和文档建议的 `openssl rand -hex 32` 一致 */
 export const generateToken = () => randomBytes(32).toString("hex");
 
+/**
+ * token 必须能原样放进 punch URI 的路径段里,所以字符集限制为
+ * URI-safe:字母、数字、-、_。任何被这里接受的值,buildPunchUri
+ * 生成后 parsePunchUri 都能原样解析回来 —— 这是 round-trip 的前提。
+ *
+ * 至少 16 位是原来的长度下限,这里保持不变;新增的是字符集约束。
+ */
+const TOKEN_RE = /^[A-Za-z0-9_-]{16,}$/;
+
+export function validateToken(token) {
+  if (typeof token !== "string" || !TOKEN_RE.test(token)) {
+    return {
+      ok: false,
+      reason: t(M.config.tokenInvalid),
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * 生成 hyperswarm topic:32 字节 base64url(无填充,43 字符)。
+ *
+ * 它是**能力凭证**(生成后持久化,不派生自 team 名,也不派生自 token):
+ * 知道 topic 才能被 DHT 发现并建立连接,见 backlog 决策
+ * generated-topic-capability。
+ */
+export const generateTopic = () => randomBytes(32).toString("base64url");
+
+/** base64url 无填充,32 字节正好 43 个字符 */
+const TOPIC_RE = /^[A-Za-z0-9_-]{43}$/;
+
+/** 校验 topic:必须是 32 字节的 base64url(接受生成器产出的规范形式) */
+export function validateTopic(topic) {
+  if (typeof topic !== "string" || !TOPIC_RE.test(topic)) {
+    return { ok: false, reason: t(M.config.topicInvalidCharset) };
+  }
+  try {
+    if (Buffer.from(topic, "base64url").length !== 32) {
+      return { ok: false, reason: t(M.config.topicInvalidLength) };
+    }
+  } catch {
+    return { ok: false, reason: t(M.config.topicInvalidBase64) };
+  }
+  return { ok: true };
+}
+
+/**
+ * join 一个 hyperswarm team 却没有 topic 时的统一拒绝文案。
+ *
+ * 指向 punch URI,因为那是正常加入路径;create 才负责生成新房间。
+ * 做成函数而不是常量:locale 是启动期才选定的,常量会冻在 import 时的语言。
+ */
+const hyperwarmTopicRequired = () => t(M.config.hyperswarmTopicRequired);
+
 export const configDir = (home = homedir()) => join(home, ".pi", "agent", "pi-agent-team");
 
 const teamFile = (team, home) => join(configDir(home), `${team}.json`);
@@ -113,7 +167,7 @@ export function removeTeam(team, home = homedir()) {
  * 注意它**不启动任何东西**,也不验证 broker 是否可达 —— 创建是本地动作。
  * join 才负责连上。
  */
-export function createTeam({ team, url, token, labels = [], mode = "broker", seeds = [], home = homedir() }) {
+export function createTeam({ team, url, token, labels = [], mode = "broker", seeds = [], topic, home = homedir() }) {
   const nameCheck = validateTeamName(team);
   if (!nameCheck.ok) return { ok: false, reason: nameCheck.reason };
 
@@ -137,15 +191,23 @@ export function createTeam({ team, url, token, labels = [], mode = "broker", see
   if (readTeam(team, home)) {
     return { ok: false, reason: t(M.config.teamExists, { team }) };
   }
-  if (token && !/^[0-9a-fA-F]{16,}$/.test(token)) {
-    // 不强制,只是提醒。用 openssl rand -hex 32 生成的正好符合。
-    return { ok: false, reason: t(M.config.tokenNotHex) };
+  if (token) {
+    const vt = validateToken(token);
+    if (!vt.ok) return { ok: false, reason: vt.reason };
   }
 
   const finalToken = token || generateToken();
   // 不写空字段 —— 空数组是 truthy,读回来会覆盖调用方给的值
   const config = { mode, token: finalToken, createdAt: new Date().toISOString() };
   if (normalized) config.url = normalized;
+  // hyperswarm 的 topic 是配置的一部分:没有就生成并持久化(0600 一起写)。
+  // 从 punch URI 加入时 topic 已给定,直接存下来复用。
+  if (mode === "hyperswarm") {
+    const finalTopic = topic || generateTopic();
+    const vt = validateTopic(finalTopic);
+    if (!vt.ok) return { ok: false, reason: vt.reason };
+    config.topic = finalTopic;
+  }
   if (labels?.length) config.labels = labels;
   const cleanSeeds = (Array.isArray(seeds) ? seeds : String(seeds ?? "").split(","))
     .map((s) => String(s).trim())
@@ -162,13 +224,17 @@ export function createTeam({ team, url, token, labels = [], mode = "broker", see
  * 找不到本地配置时,允许用 url + token 现场加入并记下来 —— 否则
  * 每台机器都要先手工建配置文件,那就不像"join"了。
  */
-export function joinTeam({ team, url, token, mode, seeds, save = true, home = homedir() }) {
+export function joinTeam({ team, url, token, mode, seeds, topic, save = true, home = homedir() }) {
   const nameCheck = validateTeamName(team);
   if (!nameCheck.ok) return { ok: false, reason: nameCheck.reason };
 
   const existing = readTeam(team, home);
 
   if (!existing) {
+    // 加入一个 hyperswarm 房间必须带着 topic。没有 topic 就自动生成一个
+    // 会把这台机器放进另一个 DHT 房间,而且症状是静默的:看起来加入了
+    // team,实际谁也发现不了谁。创建房间是 /team create 的事。
+    if (mode === "hyperswarm" && !topic) return { ok: false, reason: hyperwarmTopicRequired() };
     if (!token) {
       const known = listTeams(home);
       return {
@@ -178,22 +244,40 @@ export function joinTeam({ team, url, token, mode, seeds, save = true, home = ho
           : t(M.config.teamUnknownNeedsToken, { team }),
       };
     }
-    const created = createTeam({ team, url, token, mode, seeds, home });
+    const created = createTeam({ team, url, token, mode, seeds, topic, home });
     if (!created.ok) return created;
     return { ok: true, config: created.config, path: created.path, adopted: true };
+  }
+
+  // 已有 hyperswarm 配置缺 topic(旧版本)时**不再**静默补一个随机 topic:
+  // 那会把节点放进一个和团队不同的 DHT 房间。要加入就带上 punch URI 里的
+  // topic;想创建新房间用 /team create。
+  if ((mode ?? existing.mode) === "hyperswarm" && !(topic ?? existing.topic)) {
+    return { ok: false, reason: hyperwarmTopicRequired() };
   }
 
   // 已有配置又被显式给了选项:更新它。
   //
   // mode/seeds 也要能改 —— 否则想把 team 从 broker 换成 mesh,
   // 只能 leave 再 join,而那会把 token 一起忘掉(它没写在别处)。
-  if (url || token || mode || seeds?.length) {
+  if (url || token || mode || topic || seeds?.length) {
     const config = { ...existing };
     if (url) config.url = normalizeUrl(url);
-    if (token) config.token = token;
+    if (token) {
+      const vt = validateToken(token);
+      if (!vt.ok) return { ok: false, reason: vt.reason };
+      config.token = token;
+    }
     if (mode) {
       if (!MODES.includes(mode)) return { ok: false, reason: t(M.config.modeInvalid, { modes: MODES.join(" / "), value: mode }) };
       config.mode = mode;
+    }
+    // 从 punch URI 加入:把 URI 携带的 topic 落盘复用。缺 topic 的情况
+    // 已在上面拒绝,不会走到这里再生成一个。
+    if (topic) {
+      const vt = validateTopic(topic);
+      if (!vt.ok) return { ok: false, reason: vt.reason };
+      config.topic = topic;
     }
     if (seeds?.length) {
       const clean = (Array.isArray(seeds) ? seeds : String(seeds).split(","))

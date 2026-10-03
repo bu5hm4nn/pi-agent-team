@@ -1,7 +1,7 @@
 {
   "name": "@yiki21/pi-agent-team",
   "version": "0.4.1",
-  "description": "Turn several machines running the Pi coding agent into one team over your tailnet. Three transports (broker / mesh / SWIM), one shared API and conformance suite.",
+  "description": "Turn several machines running the Pi coding agent into one team over your tailnet. Four transports (broker / mesh / SWIM / hyperswarm), one shared API and conformance suite.",
   "license": "MIT",
   "author": "Yiki21",
   "type": "module",
@@ -52,6 +52,8 @@
     "src/options.js",
     "src/session.js",
     "src/team-config.js",
+    "src/transport-hyperswarm.js",
+    "src/hyperswarm.d.ts",
     "src/transport-mesh.js",
     "src/transport-swim.js",
     "src/transport.js",
@@ -90,5 +92,11 @@
     "typebox": {
       "optional": true
     }
+  },
+  "optionalDependencies": {
+    "hyperswarm": "4.17.2"
+  },
+  "devDependencies": {
+    "hyperdht": "6.34.0"
   }
 }

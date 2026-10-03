@@ -22,7 +22,7 @@ import {
   teamSize,
 } from "./session.js";
 import { createTeam, joinTeam, leaveTeam, listTeams, readTeam } from "./team-config.js";
-import { optionHelp, checkModeRequirements, parseOptionArgs, validateOptions } from "./options.js";
+import { optionHelp, buildPunchUri, checkModeRequirements, parseOptionArgs, validateOptions } from "./options.js";
 import { MODES } from "./mode.js";
 import { t } from "./i18n.js";
 import { M } from "./messages.js";
@@ -275,14 +275,45 @@ function createResult(args, state) {
   const v = validateOptions(values);
   if (!v.ok) return bad(v.reason);
 
-  const mode = v.team.mode ?? "broker";
+  // create 的默认模式:显式给 mode 就用它;只给 url 说明是老习惯(broker);
+  // 什么都不给时按 owner 指定的 UX 默认 hyperswarm —— 生成 token + topic,
+  // 打印一条 punch URI,新机器只凭它就能加入。
+  let mode = v.team.mode;
+  if (!mode) mode = v.team.url ? "broker" : "hyperswarm";
+
   const req = checkModeRequirements({
     mode,
     url: v.team.url,
     seeds: v.team.seeds,
     token: v.team.token ?? "(to-be-generated)",
+    topic: v.team.topic ?? "(to-be-generated)",
   });
   if (!req.ok) return bad(req.reason);
+
+  // 已存在的 team:不重新创建。hyperswarm 把存好的 URI 再打印一次
+  // (它只在配置里,重复创建不能让用户拿到);别的模式保持原有拒绝行为。
+  const existing = readTeam(team);
+  if (existing) {
+    const cleanHyperswarm = existing.mode === "hyperswarm" && existing.topic;
+    if (cleanHyperswarm && !v.team.mode && !v.team.url && !v.team.topic) {
+      const uri = buildPunchUri({ name: team, topic: existing.topic, token: existing.token });
+      return ok(
+        [
+          t(M.dispatch.createExistsHyperswarm, { team }),
+          "",
+          uri,
+          "",
+          t(M.dispatch.createPunchJoinIntroShort),
+          `  TEAM_PUNCH='${uri}' pi`,
+          t(M.dispatch.createPunchJoinLocal, { uri }),
+        ],
+        { party: { kind: "connect", team, config: existing, session: v.session } },
+      );
+    }
+    return bad(
+      t(M.dispatch.createExistsOther, { team, mode: existing.mode ?? "broker" }),
+    );
+  }
 
   const r = createTeam({
     team,
@@ -290,6 +321,7 @@ function createResult(args, state) {
     token: v.team.token,
     mode,
     seeds: v.team.seeds ?? [],
+    topic: v.team.topic,
   });
   if (!r.ok) return bad(r.reason);
 
@@ -300,6 +332,25 @@ function createResult(args, state) {
   if (r.config.url) lines.push(t(M.dispatch.brokerLine, { url: r.config.url }));
   if (r.config.seeds?.length) lines.push(t(M.dispatch.seedsLine, { seeds: r.config.seeds.join(", ") }));
   if (req.warning) lines.push("", t(M.dispatch.warning, { warning: req.warning }));
+
+  if (r.config.mode === "hyperswarm") {
+    // punch URI 就是唯一要复制的东西:token 和 topic 都在里面。
+    const uri = buildPunchUri({ name: team, topic: r.config.topic, token: r.token });
+    lines.push(
+      "",
+      t(M.dispatch.createPunchHeading),
+      "",
+      uri,
+      "",
+      t(M.dispatch.createPunchJoinIntro),
+      `  TEAM_PUNCH='${uri}' pi`,
+      t(M.dispatch.createPunchJoinLocal, { uri }),
+    );
+    // 创建后直接连上,省得用户再敲一次 join
+    return ok(lines, {
+      party: { kind: "connect", team, config: r.config, session: v.session },
+    });
+  }
 
   if (r.created) {
     lines.push("", t(M.dispatch.createTokenGenerated), r.token);
@@ -353,7 +404,6 @@ function createResult(args, state) {
           token: r.token,
         }),
   );
-  // 创建后直接连上,省得用户再敲一次 join
   return ok(lines, {
     party: {
       kind: "connect",
@@ -370,19 +420,32 @@ function joinResult(args, state) {
     return bad(`${t(M.dispatch.unknownOptions, { options: parsed.unknown.join(", ") })}\n${optionHelp()}`);
   }
 
-  const [team, posUrl, posToken] = parsed.rest;
-  if (!team) return bad(missingTeamName("join", parsed));
+  // 位置参数可能是 punch URI。任何带 scheme 的字符串先当 URI 解析,
+  // 解析失败就直接拒绝 —— 绝不降级成 team 名或种子。
+  const rest = [...parsed.rest];
+  let positionalPunch = null;
+  if (rest[0] && /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rest[0])) {
+    positionalPunch = rest.shift();
+  }
+  const [team, posUrl, posToken] = rest;
 
   const values = { ...parsed.values };
+  // 显式 --punch 优先于位置 URI。validateOptions 会把 punch 展开成
+  // mode/topic/token,后面的显式选项再覆盖它。
+  if (positionalPunch && !values.punch) values.punch = positionalPunch;
   if (posUrl && !values.url) values.url = posUrl;
   if (posToken && !values.token) values.token = posToken;
 
   const v = validateOptions(values);
   if (!v.ok) return bad(v.reason);
 
+  // punch URI 自带 team 名;否则用位置参数。
+  const targetTeam = v.punch?.name ?? team;
+  if (!targetTeam) return bad(missingTeamName("join", parsed));
+
   // 已有配置时,mode/seeds 必须能改 —— 否则想从 broker 换成 mesh
   // 就只能 leave 再 join,而那会把 token 也一起忘掉。
-  const existing = readTeam(team);
+  const existing = readTeam(targetTeam);
   const mode = v.team.mode ?? existing?.mode ?? "broker";
 
   const req = checkModeRequirements({
@@ -390,20 +453,22 @@ function joinResult(args, state) {
     url: v.team.url ?? existing?.url,
     seeds: v.team.seeds ?? existing?.seeds,
     token: v.team.token ?? existing?.token,
+    topic: v.team.topic ?? existing?.topic,
   });
   if (!req.ok) return bad(req.reason);
 
   const r = joinTeam({
-    team,
+    team: targetTeam,
     url: v.team.url,
     token: v.team.token,
     mode: v.team.mode,
     seeds: v.team.seeds,
+    topic: v.team.topic,
   });
   if (!r.ok) return bad(r.reason);
 
   const lines = [
-    t(M.dispatch.joinJoined, { team }),
+    t(M.dispatch.joinJoined, { team: targetTeam }),
     t(M.dispatch.modeLine, { mode: r.config.mode }),
   ];
   if (r.config.url) lines.push(t(M.dispatch.brokerLine, { url: r.config.url }));
@@ -415,7 +480,7 @@ function joinResult(args, state) {
   return ok(lines, {
     party: {
       kind: "connect",
-      team,
+      team: targetTeam,
       config: r.config,
       session: v.session,
     },
@@ -435,6 +500,7 @@ function modeResult(args, state, env) {
       t(M.dispatch.modeHelpBroker),
       t(M.dispatch.modeHelpMesh),
       t(M.dispatch.modeHelpSwim),
+      t(M.dispatch.modeHelpHyperswarm),
       "",
       t(M.dispatch.modeNote1),
       t(M.dispatch.modeNote2),
@@ -458,6 +524,7 @@ function modeResult(args, state, env) {
     url: existing.url,
     seeds: existing.seeds,
     token: existing.token,
+    topic: existing.topic,
   });
   if (!req.ok) return bad(req.reason);
 

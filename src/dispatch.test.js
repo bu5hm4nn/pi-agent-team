@@ -611,6 +611,95 @@ test("create:支持 --mode/--seeds,并给出其它机器的加入命令", async 
   assert.match(joinLine, /--mode mesh/, "加入命令必须带上模式,否则对方会按 broker 连");
 });
 
+// ---------------------------------------------------------------- punch URI
+
+const topic64 = (b = 9) => Buffer.alloc(32, b).toString("base64url");
+
+test("create:不带 url/mode 时默认 hyperswarm 并打印 punch URI", async (t) => {
+  isolatedHome(t);
+  const { readTeam } = await import("./team-config.js");
+  const c = setup();
+  const r = run("create", ["hsroom"], c);
+
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.party.config.mode, "hyperswarm", "owner 指定的 UX:无 url 时默认 hyperswarm");
+  const uriLine = r.lines.find((l) => l.startsWith("punch://"));
+  assert.ok(uriLine, "要打印一条可复制的 punch URI");
+
+  const saved = readTeam("hsroom");
+  assert.equal(saved.mode, "hyperswarm");
+  assert.equal(saved.topic, r.party.config.topic, "topic 要落盘");
+  assert.ok(uriLine.includes(saved.topic), "URI 里要带着落盘的 topic");
+});
+
+test("create:已存在的 hyperswarm team 重印同一条 URI,而不是拒绝", async (t) => {
+  isolatedHome(t);
+  const first = run("create", ["hsagain"], setup());
+  assert.equal(first.ok, true, first.error);
+  const firstUri = first.lines.find((l) => l.startsWith("punch://"));
+
+  const again = run("create", ["hsagain"], setup());
+  assert.equal(again.ok, true, again.error);
+  assert.equal(again.lines.find((l) => l.startsWith("punch://")), firstUri, "URI 必须与创建时一致");
+});
+
+test("create:已存在的非 hyperswarm team 仍拒绝", async (t) => {
+  isolatedHome(t);
+  const c = setup();
+  assert.equal(run("create", ["broom", "--url", "http://h:1"], c).ok, true);
+  const again = run("create", ["broom"], setup());
+  assert.equal(again.ok, false);
+  assert.match(again.error, /已存在/);
+});
+
+test("create:带 --url 时仍是 broker(向后兼容)", async (t) => {
+  isolatedHome(t);
+  const r = run("create", ["bcompat", "--url", "http://h:1"], setup());
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.party.config.mode, "broker");
+});
+
+test("join:punch URI 作为第一个位置参数,一条就够", async (t) => {
+  isolatedHome(t);
+  const { readTeam } = await import("./team-config.js");
+  const topic = topic64(9);
+  const uri = `punch://dev/${topic}/${TOKEN64}`;
+
+  const r = run("join", [uri], setup());
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.party.kind, "connect");
+  assert.equal(r.party.team, "dev", "team 名来自 URI");
+  assert.equal(r.party.config.mode, "hyperswarm", "URI 加入默认 hyperswarm");
+  assert.equal(r.party.config.topic, topic);
+
+  const saved = readTeam("dev");
+  assert.equal(saved.mode, "hyperswarm");
+  assert.equal(saved.topic, topic, "topic 要落盘");
+  assert.equal(saved.token, TOKEN64);
+});
+
+test("join:--punch 选项与位置 URI 等价,且能覆盖 token", async (t) => {
+  isolatedHome(t);
+  const topic = topic64(3);
+  const uri = `punch://dev2/${topic}/${TOKEN64}`;
+  const override = "b".repeat(64);
+
+  const r = run("join", ["--punch", uri, "--token", override], setup());
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.party.team, "dev2");
+  assert.equal(r.party.config.token, override, "显式 token 覆盖 URI 里的");
+  assert.equal(r.party.config.topic, topic);
+});
+
+test("join:畸形 / 外来 scheme 的 URI 被拒绝,不当作 team 名或种子", async (t) => {
+  isolatedHome(t);
+  for (const bad of ["punch://BAD/abc/token", "punch://dev/not-base64url/short", "http://host/x/y"]) {
+    const r = run("join", [bad], setup());
+    assert.equal(r.ok, false, `应拒绝 ${bad}`);
+    assert.ok(r.error && r.error.length, `要给出原因:${bad}`);
+  }
+});
+
 test("mode:切换模式时 url/token/seeds 不动", async (t) => {
   isolatedHome(t);
   const { readTeam } = await import("./team-config.js");

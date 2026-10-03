@@ -9,10 +9,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ALL_KEYS,
+  buildPunchUri,
   checkModeRequirements,
   parseLabels,
   parseOptionArgs,
+  parsePunchUri,
   parseSeeds,
+  punchFromEnv,
   validateOptions,
 } from "./options.js";
 import { setLocale } from "./i18n.js";
@@ -72,7 +75,7 @@ test("parseOptionArgs:空数组和空字符串不炸", () => {
 test("ALL_KEYS 覆盖三个入口文档里承诺的全部选项", () => {
   assert.deepEqual(
     [...ALL_KEYS].sort(),
-    ["labels", "listen", "mode", "name", "port", "seeds", "token", "url"],
+    ["labels", "listen", "mode", "name", "port", "punch", "seeds", "token", "topic", "url"],
   );
 });
 
@@ -116,9 +119,18 @@ test("validateOptions:seed 必须带端口", () => {
   assert.match(bad.reason, /host:port/);
 });
 
-test("validateOptions:token 太短被拒", () => {
+test("validateOptions:token 太短或含 URI 不安全字符被拒", () => {
   assert.equal(validateOptions({ token: "x".repeat(64) }).ok, true);
-  assert.equal(validateOptions({ token: "short" }).ok, false);
+  const short = validateOptions({ token: "short" });
+  assert.equal(short.ok, false);
+  assert.match(short.reason, /16/);
+
+  // 这些字符会把 punch URI 的路径段切坏或无法 round-trip
+  for (const bad of ["a".repeat(15) + "/", "has space" + "a".repeat(10), "a".repeat(15) + "+", "a".repeat(15) + "=", "a".repeat(15) + ":"]) {
+    assert.equal(validateOptions({ token: bad }).ok, false, `应拒绝 token "${bad}"`);
+  }
+  // - 和 _ 是 URI-safe 的
+  assert.equal(validateOptions({ token: "a_b-cD9".repeat(3) }).ok, true);
 });
 
 test("validateOptions:name 允许常见写法,拒绝空格和路径分隔符", () => {
@@ -177,6 +189,120 @@ test("checkModeRequirements:mesh/swim 没 seeds 可用但带警告", () => {
     assert.match(r.warning, /seeds/, `${mode} 要说清后果`);
     assert.equal(checkModeRequirements({ mode, token: "t", seeds: ["a:1"] }).warning, undefined);
   }
+});
+
+test("checkModeRequirements:hyperswarm 要 token 和 topic,不要 seeds", () => {
+  const noTopic = checkModeRequirements({ mode: "hyperswarm", token: "t" });
+  assert.equal(noTopic.ok, false);
+  assert.match(noTopic.reason, /topic/);
+
+  const topic = buildPunchTopic();
+  const r = checkModeRequirements({ mode: "hyperswarm", token: "t", topic });
+  assert.equal(r.ok, true);
+  assert.equal(r.warning, undefined, "hyperswarm 不该提示 seeds");
+});
+
+// ---------------------------------------------------------------- punch URI
+
+/** 一个规范的 32 字节 base64url topic(43 字符) */
+function buildPunchTopic(byte = 7) {
+  return Buffer.alloc(32, byte).toString("base64url");
+}
+
+const PUNCH_URI = `punch://dev/${buildPunchTopic()}/${"a".repeat(64)}`;
+
+test("parsePunchUri:规范 URI 解析出 name/topic/token", () => {
+  const r = parsePunchUri(PUNCH_URI);
+  assert.equal(r.ok, true);
+  assert.equal(r.name, "dev");
+  assert.equal(r.topic, buildPunchTopic());
+  assert.equal(r.token, "a".repeat(64));
+});
+
+test("buildPunchUri:与 parsePunchUri 互逆", () => {
+  const built = buildPunchUri({ name: "dev", topic: buildPunchTopic(), token: "a".repeat(64) });
+  assert.equal(built, PUNCH_URI);
+  const parsed = parsePunchUri(built);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.name, "dev");
+});
+
+test("buildPunchUri:topic 接受 Buffer", () => {
+  const built = buildPunchUri({ name: "dev", topic: Buffer.alloc(32, 7), token: "a".repeat(64) });
+  assert.equal(built, PUNCH_URI);
+});
+
+test("parsePunchUri:畸形输入一律带 reason 拒绝,绝不降级成 team 名或种子", () => {
+  const cases = [
+    "",
+    "dev",
+    "http://host/topic/token", // 外来 scheme
+    "PUNCH://dev/topic/token", // 大小写不对
+    `punch://dev/${buildPunchTopic()}`, // 少了 token
+    `punch:///dev/${buildPunchTopic()}/token`, // 缺 name
+    `punch://BAD/${buildPunchTopic()}/${"a".repeat(64)}`, // team 名非法(大写)
+    `punch://dev/not-base64url/${ "a".repeat(64)}`, // topic 非法
+    `punch://dev/${buildPunchTopic()}/short`, // token 太短
+    `punch://dev/${buildPunchTopic()}/${ "a".repeat(64)}/extra`, // 多一段
+  ];
+  for (const bad of cases) {
+    const r = parsePunchUri(bad);
+    assert.equal(r.ok, false, `应被拒:${bad}`);
+    assert.ok(r.reason && r.reason.length > 0, `必须给出 reason:${bad}`);
+  }
+});
+
+test("parsePunchUri:topic 长度不对(不是 32 字节)被拒", () => {
+  const short = Buffer.alloc(16, 1).toString("base64url");
+  const r = parsePunchUri(`punch://dev/${short}/${ "a".repeat(64)}`);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /topic/);
+});
+
+test("parsePunchUri:token 含 URI 不安全字符时被拒(否则 round-trip 会丢字节)", () => {
+  for (const bad of ["a".repeat(15) + "+", "a".repeat(15) + "=", "has space" + "a".repeat(10)]) {
+    const r = parsePunchUri(`punch://dev/${buildPunchTopic()}/${bad}`);
+    assert.equal(r.ok, false, `应拒绝 token "${bad}"`);
+    assert.ok(r.reason && r.reason.length, "必须给出 reason");
+  }
+});
+
+test("validateOptions:punch 展开成 hyperswarm + topic + token", () => {
+  const r = validateOptions({ punch: PUNCH_URI });
+  assert.equal(r.ok, true);
+  assert.equal(r.team.mode, "hyperswarm");
+  assert.equal(r.team.topic, buildPunchTopic());
+  assert.equal(r.team.token, "a".repeat(64));
+  assert.deepEqual(r.punch, { name: "dev" });
+});
+
+test("validateOptions:畸形 punch 被拒", () => {
+  const r = validateOptions({ punch: "http://x/y/z" });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /punch/);
+});
+
+test("validateOptions:TEAM_TOKEN 是可选覆盖,不是第二个必填项", () => {
+  const override = "b".repeat(64);
+  const r = validateOptions({ punch: PUNCH_URI, token: override });
+  assert.equal(r.ok, true);
+  assert.equal(r.team.token, override, "显式 token 应覆盖 URI 里的 token");
+  assert.equal(r.team.topic, buildPunchTopic(), "topic 仍来自 URI");
+});
+
+test("validateOptions:topic 单独校验(base64url,32 字节)", () => {
+  assert.equal(validateOptions({ topic: buildPunchTopic() }).team.topic, buildPunchTopic());
+  assert.equal(validateOptions({ topic: "short" }).ok, false);
+  assert.equal(validateOptions({ topic: "x".repeat(44) }).ok, false, "44 字符超出 32 字节 base64url");
+});
+
+test("punchFromEnv:TEAM_PUNCH 走同一条解析路径", () => {
+  assert.equal(punchFromEnv({}), null);
+  assert.equal(punchFromEnv({ TEAM_PUNCH: "" }), null);
+  const r = punchFromEnv({ TEAM_PUNCH: PUNCH_URI });
+  assert.equal(r.ok, true);
+  assert.equal(r.name, "dev");
+  assert.equal(punchFromEnv({ TEAM_PUNCH: "nonsense" }).ok, false);
 });
 
 // ---------------------------------------------------------------- 监听设置(仅本次运行)

@@ -21,15 +21,19 @@ description: 与其他 Pi 节点(可能在别的机器,也可能是同一台机�
 
 ## 模式和团队配置
 
-团队有三种连接模式,由统一配置决定。需要加入或改配置时用 `team_join`:
+团队有四种连接模式,由统一配置决定。加入一个已有房间,首选是把创建时
+打印的 punch URI 直接交给 `team_join` —— 一条 URI 就够:
 
 ```
-team_join({ team: "dev", token: "...", url: "http://100.64.0.1:8787" })                    // broker(默认)
-team_join({ team: "dev", token: "...", mode: "mesh", seeds: ["100.64.0.1:19801"] })        // 直连
-team_join({ team: "dev", token: "...", mode: "swim", seeds: ["100.64.0.1:7946"] })         // SWIM 管成员
+team_join({ punch: "punch://dev/<topic>/<token>" })                    // 无服务器(hyperswarm)
+team_join({ team: "dev", token: "...", url: "http://100.64.0.1:8787" })  // broker
+team_join({ team: "dev", token: "...", mode: "mesh", seeds: ["100.64.0.1:19801"] })  // 直连
+team_join({ team: "dev", token: "...", mode: "swim", seeds: ["100.64.0.1:7946"] })   // SWIM 管成员
 ```
 
-- `mode`、`seeds` 会写进本机 team 配置,下次启动不用再给。
+用 `punch` 时不需要再给 `team` / `token` / `url` / `seeds` —— 它们都在 URI 里。
+
+- `mode`、`seeds`、`topic` 会写进本机 team 配置,下次启动不用再给。
 - `name`、`labels`、`port`、`listen` **只影响本次运行**,不落盘 ——
   同一台机器可以有多个 Pi,它们共用一份配置。节点名存进去会让第二个
   agent 覆盖第一个;端口存进去会让它监听一个已被占用的端口。

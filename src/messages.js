@@ -121,6 +121,12 @@ const dispatch = Object.freeze({
 
   createCreated: "dispatch.create.created",
   createTokenGenerated: "dispatch.create.tokenGenerated",
+  createExistsHyperswarm: "dispatch.create.existsHyperswarm",
+  createExistsOther: "dispatch.create.existsOther",
+  createPunchHeading: "dispatch.create.punchHeading",
+  createPunchJoinIntro: "dispatch.create.punchJoinIntro",
+  createPunchJoinIntroShort: "dispatch.create.punchJoinIntroShort",
+  createPunchJoinLocal: "dispatch.create.punchJoinLocal",
   createBrokerNextStep: "dispatch.create.brokerNextStep",
   createBrokerHostUnknown: "dispatch.create.brokerHostUnknown",
   createBrokerRunIntro: "dispatch.create.brokerRunIntro",
@@ -140,6 +146,7 @@ const dispatch = Object.freeze({
   modeHelpBroker: "dispatch.mode.helpBroker",
   modeHelpMesh: "dispatch.mode.helpMesh",
   modeHelpSwim: "dispatch.mode.helpSwim",
+  modeHelpHyperswarm: "dispatch.mode.helpHyperswarm",
   modeNote1: "dispatch.mode.note1",
   modeNote2: "dispatch.mode.note2",
   modeInvalid: "dispatch.mode.invalid",
@@ -213,6 +220,11 @@ const config = Object.freeze({
   brokerNeedsUrl: "config.brokerNeedsUrl",
   teamExists: "config.teamExists",
   tokenNotHex: "config.tokenNotHex",
+  tokenInvalid: "config.tokenInvalid",
+  topicInvalidCharset: "config.topicInvalidCharset",
+  topicInvalidLength: "config.topicInvalidLength",
+  topicInvalidBase64: "config.topicInvalidBase64",
+  hyperswarmTopicRequired: "config.hyperswarmTopicRequired",
   teamUnknownKnown: "config.teamUnknownKnown",
   teamUnknownNeedsToken: "config.teamUnknownNeedsToken",
   teamUnknown: "config.teamUnknown",
@@ -227,12 +239,19 @@ const mode = Object.freeze({
   meshNoSeedsShort: "mode.meshNoSeedsShort",
   swimSidecarMissing: "mode.swimSidecarMissing",
   swimSidecarNotFound: "mode.swimSidecarNotFound",
+  hyperswarmNeedsTopic: "mode.hyperswarmNeedsTopic",
+  hyperswarmNeedsTopicShort: "mode.hyperswarmNeedsTopicShort",
   unknown: "mode.unknown",
   unknownNoQuote: "mode.unknownNoQuote",
 });
 
 const transport = Object.freeze({
   swimSidecarMissing: "transport.swimSidecarMissing",
+  hyperswarmEmptyModule: "transport.hyperswarmEmptyModule",
+  hyperswarmMissingDep: "transport.hyperswarmMissingDep",
+  hyperswarmMissingToken: "transport.hyperswarmMissingToken",
+  hyperswarmBadTopic: "transport.hyperswarmBadTopic",
+  hyperswarmLoadFailed: "transport.hyperswarmLoadFailed",
 });
 
 /** registerFlag 的帮助文案(人类可见,冻结在扩展加载时)。 */
@@ -243,6 +262,8 @@ const flag = Object.freeze({
   teamMode: "flag.teamMode",
   teamSeeds: "flag.teamSeeds",
   teamUrl: "flag.teamUrl",
+  teamPunch: "flag.teamPunch",
+  punch: "flag.punch",
   teamReply: "flag.teamReply",
   teamLang: "flag.teamLang",
 });
@@ -275,6 +296,14 @@ const ui = Object.freeze({
   modeBrokerRecommend: "ui.modeBrokerRecommend",
   modeMeshNoCenter: "ui.modeMeshNoCenter",
   modeSwimMembers: "ui.modeSwimMembers",
+  modeHyperswarmDefault: "ui.modeHyperswarmDefault",
+  modeHyperswarmJoin: "ui.modeHyperswarmJoin",
+  inputPunchUri: "ui.inputPunchUri",
+  notifyPunchInvalid: "ui.notifyPunchInvalid",
+  notifyPunchJoined: "ui.notifyPunchJoined",
+  notifyPunchCreated: "ui.notifyPunchCreated",
+  acPunch: "ui.acPunch",
+  acTopic: "ui.acTopic",
   brokerAddress: "ui.brokerAddress",
   inputSeeds: "ui.inputSeeds",
   placeholderSeedsSwim: "ui.placeholderSeedsSwim",
@@ -357,6 +386,13 @@ const options = Object.freeze({
   missingToken: "options.missingToken",
   brokerNeedsUrl: "options.brokerNeedsUrl",
   meshNoSeeds: "options.meshNoSeeds",
+  punchEmpty: "options.punchEmpty",
+  punchScheme: "options.punchScheme",
+  punchFormat: "options.punchFormat",
+  punchTeamNameInvalid: "options.punchTeamNameInvalid",
+  punchTopicInvalid: "options.punchTopicInvalid",
+  punchInvalid: "options.punchInvalid",
+  hyperswarmTopicRequired: "options.hyperswarmTopicRequired",
 });
 
 export const M = Object.freeze({

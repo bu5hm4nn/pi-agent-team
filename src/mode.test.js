@@ -37,8 +37,8 @@ test("resolveMode:非法模式明确报错并列出合法值", () => {
   for (const m of MODES) assert.match(r.reason, new RegExp(m));
 });
 
-test("MODES 正好是三种", () => {
-  assert.deepEqual([...MODES].sort(), ["broker", "mesh", "swim"]);
+test("MODES 正好是四种", () => {
+  assert.deepEqual([...MODES].sort(), ["broker", "hyperswarm", "mesh", "swim"]);
 });
 
 // ---------------------------------------------------------------- seeds 规范化
@@ -82,6 +82,14 @@ test("modeReadiness:swim 缺边车不可用", () => {
   const r = modeReadiness("swim", { token: "t" }, "/nonexistent/sidecar");
   assert.equal(r.ready, false);
   assert.match(r.reason, /边车/);
+});
+
+test("modeReadiness:hyperswarm 需要 topic", () => {
+  assert.equal(modeReadiness("hyperswarm", { token: "t" }).ready, false);
+  assert.match(modeReadiness("hyperswarm", { token: "t" }).reason, /topic/);
+  assert.equal(modeReadiness("hyperswarm", { token: "t", topic: Buffer.alloc(32) }).ready, true);
+  // 拼错的 topic 也不能蒙混过关
+  assert.equal(modeReadiness("hyperswarm", { token: "t", topic: "not-a-topic" }).ready, false);
 });
 
 // ---------------------------------------------------------------- 工厂
@@ -131,6 +139,41 @@ test("createTransport:swim 缺边车是硬失败,不降级成别的模式", () =
   assert.equal(r.ok, false, "缺边车必须失败,不能悄悄用 broker 或 mesh 顶上");
   assert.equal(r.transport, undefined);
   assert.match(r.reason, /go build/, "要告诉用户怎么构建");
+});
+
+test("createTransport:hyperswarm 缺 topic 时拒绝并说明用法", () => {
+  const r = createTransport({ mode: "hyperswarm", config: { token: "t" } });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /topic/);
+});
+
+test("createTransport:hyperswarm 的 topic 拼错时也拒绝", () => {
+  const r = createTransport({ mode: "hyperswarm", config: { token: "t", topic: "not-base64url" } });
+  assert.equal(r.ok, false, "只判 truthy 会让拼错的 topic 到 start() 才失败");
+  assert.match(r.reason, /topic/);
+});
+
+test("createTransport:hyperswarm 有 topic 时给出 transport 且 mode 正确", () => {
+  const r = createTransport({ mode: "hyperswarm", config: { token: "t", topic: Buffer.alloc(32, 7) } });
+  assert.equal(r.ok, true);
+  assert.equal(r.transport.mode, "hyperswarm");
+  r.transport.stop();
+});
+
+test("createTransport:hyperswarm 缺可选原生依赖时硬失败,不拖累其它模式", () => {
+  // 模拟 hyperswarm 没装 / 原生 addon 构建失败。swim 缺边车是硬失败,
+  // hyperswarm 缺依赖同样:不能降级成别的模式,也不能影响 broker/mesh/swim。
+  const r = createTransport({
+    mode: "hyperswarm",
+    config: { token: "t", topic: Buffer.alloc(32, 3) },
+    hyperswarmLoader: () => {
+      throw new Error("native addon missing");
+    },
+  });
+  assert.equal(r.ok, false, "缺可选依赖必须失败");
+  assert.equal(r.transport, undefined);
+  assert.match(r.reason, /hyperswarm/, "要提到缺的是哪个依赖");
+  assert.match(r.reason, /broker\/mesh\/swim/, "要说明其它模式不受影响");
 });
 
 test("createTransport:未知模式被拒", () => {
