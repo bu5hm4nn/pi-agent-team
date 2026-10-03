@@ -82,6 +82,12 @@ or a recorded reason, not a silent change.
   silently surprised (the two-node test works only because its injected DHT already
   carries the same bootstrap). Document this on the `dht` JSDoc param, or assert the
   injected DHT's bootstrap matches.
+- **U8 — the team-name rule copy is wrong in the source.**
+  `dispatch.missingTeam.createNameRule` says lowercase letters and digits only, but
+  the real rule also allows `. _ -` and up to 32 characters, and
+  `validateTeamName`'s own message disagrees again. Fix both locales together, as a
+  scoped copy change (the council flagged it during the story-15 translation
+  review; do not silently fix English alone).
 
 ## Already tracked elsewhere
 
