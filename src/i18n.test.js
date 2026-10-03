@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { t, setLocale, getLocale, resolveLocale, createTranslator } from "./i18n.js";
+import { t, setLocale, getLocale, resolveLocale, resolveLocaleInfo, startupLocaleEnv, createTranslator } from "./i18n.js";
 import { M } from "./messages.js";
 import { enUS } from "./locales/en-US.js";
 import { zhHans } from "./locales/zh-Hans.js";
@@ -124,6 +124,68 @@ test("resolveLocale:显式覆盖不支持的语言会警告并回退 en-US", () 
     assert.equal(resolveLocale({ TEAM_LANG: "fr-FR", LC_ALL: "zh_CN" }, {}), "en-US");
   });
   assert.ok(warns3.length > 0, "显式覆盖未命中时不应继续探测 shell");
+});
+
+test("resolveLocaleInfo:报告生效语言与来源", () => {
+  // --team-lang flag 值与 TEAM_LANG 同时给,flag 必须赢 —— 这就是 index.ts
+  // 启动时把 pi.getFlag("team-lang") 送进 env.teamLang 的那条链。
+  assert.deepEqual(resolveLocaleInfo({ teamLang: "zh-Hans", TEAM_LANG: "en-US" }, {}), {
+    locale: "zh-Hans",
+    source: "flag",
+    value: "zh-Hans",
+    unsupported: false,
+  });
+  assert.deepEqual(resolveLocaleInfo({ TEAM_LANG: "zh-Hans" }, {}), {
+    locale: "zh-Hans",
+    source: "env",
+    value: "zh-Hans",
+    unsupported: false,
+  });
+  assert.deepEqual(resolveLocaleInfo({}, { lang: "zh-Hans" }), {
+    locale: "zh-Hans",
+    source: "config",
+    value: "zh-Hans",
+    unsupported: false,
+  });
+  assert.deepEqual(resolveLocaleInfo({ LC_ALL: "zh_CN" }, {}), {
+    locale: "zh-Hans",
+    source: "lc_all",
+    value: "zh_CN",
+    unsupported: false,
+  });
+  assert.deepEqual(resolveLocaleInfo({ LC_MESSAGES: "zh_CN" }, {}), {
+    locale: "zh-Hans",
+    source: "lc_messages",
+    value: "zh_CN",
+    unsupported: false,
+  });
+  assert.deepEqual(resolveLocaleInfo({ LANG: "zh_CN.UTF-8" }, {}), {
+    locale: "zh-Hans",
+    source: "lang",
+    value: "zh_CN.UTF-8",
+    unsupported: false,
+  });
+
+  // 不支持的显式覆盖:回退 en-US,但汇报里仍指出来源与原始值
+  const warns = captureWarn(() => {
+    assert.deepEqual(resolveLocaleInfo({ TEAM_LANG: "fr-FR" }, {}), {
+      locale: "en-US",
+      source: "env",
+      value: "fr-FR",
+      unsupported: true,
+    });
+  });
+  assert.ok(warns.some((w) => w.includes("fr-FR")), "resolveLocaleInfo 也应警告");
+});
+
+test("--team-lang flag 经 startupLocaleEnv 进入检测链顶端(env.teamLang 不是死代码)", () => {
+  // 模拟 index.ts 的启动接入:把 Pi 的 --team-lang flag 值并入 env。
+  // flag 必须压过 shell 信号,证明检测链顶端真的接上了。
+  assert.equal(resolveLocale(startupLocaleEnv("zh-Hans", { LANG: "en_US.UTF-8" }), {}), "zh-Hans");
+  assert.equal(resolveLocale(startupLocaleEnv("en-US", { LANG: "zh_CN" }), {}), "en-US");
+  // 没有 flag / 空 flag 时不得伪造一个空覆盖把 shell 信号压掉
+  assert.equal(resolveLocale(startupLocaleEnv(undefined, { LANG: "zh_CN" }), {}), "zh-Hans");
+  assert.equal(resolveLocale(startupLocaleEnv("", { LANG: "zh_CN" }), {}), "zh-Hans");
 });
 
 // ---------------------------------------------------------------- t()

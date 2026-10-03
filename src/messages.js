@@ -64,6 +64,11 @@ const tool = Object.freeze({
   delivered: "tool.delivered",
   noPeers: "tool.noPeers",
   currentTeam: "tool.currentTeam",
+  // 工具 execute() 的返回文字。它同时进 UI 和模型上下文,但按 story 18
+  // 的定位属于"人类可见的失败/回执行",不随 D1 的模型载荷一起冻结。
+  sendFailed: "tool.sendFailed",
+  receipt: "tool.receipt",
+  failed: "tool.failed",
 });
 
 const dispatch = Object.freeze({
@@ -230,6 +235,114 @@ const transport = Object.freeze({
   swimSidecarMissing: "transport.swimSidecarMissing",
 });
 
+/** registerFlag 的帮助文案(人类可见,冻结在扩展加载时)。 */
+const flag = Object.freeze({
+  team: "flag.team",
+  teamName: "flag.teamName",
+  teamLabels: "flag.teamLabels",
+  teamMode: "flag.teamMode",
+  teamSeeds: "flag.teamSeeds",
+  teamUrl: "flag.teamUrl",
+  teamReply: "flag.teamReply",
+  teamLang: "flag.teamLang",
+});
+
+/** registerCommand 的帮助文案。 */
+const command = Object.freeze({
+  team: "command.team",
+});
+
+/** index.ts 的交互界面文案(菜单、ui.select / ui.input 标题与选项)。 */
+const ui = Object.freeze({
+  confirmBulkTitle: "ui.confirmBulkTitle",
+  confirmBulkBody: "ui.confirmBulkBody",
+
+  menuViewMembers: "ui.menuViewMembers",
+  menuSendToNode: "ui.menuSendToNode",
+  menuBroadcast: "ui.menuBroadcast",
+  menuManageLabels: "ui.menuManageLabels",
+  menuTeamManage: "ui.menuTeamManage",
+  menuConnectMode: "ui.menuConnectMode",
+  menuReplyStrategy: "ui.menuReplyStrategy",
+  menuStatus: "ui.menuStatus",
+
+  inputNewTeam: "ui.inputNewTeam",
+  placeholderLowerAlnum: "ui.placeholderLowerAlnum",
+  selectJoinTeam: "ui.selectJoinTeam",
+  optionNewTeam: "ui.optionNewTeam",
+  inputTeamName: "ui.inputTeamName",
+  selectConnectMode: "ui.selectConnectMode",
+  modeBrokerRecommend: "ui.modeBrokerRecommend",
+  modeMeshNoCenter: "ui.modeMeshNoCenter",
+  modeSwimMembers: "ui.modeSwimMembers",
+  brokerAddress: "ui.brokerAddress",
+  inputSeeds: "ui.inputSeeds",
+  placeholderSeedsSwim: "ui.placeholderSeedsSwim",
+  placeholderSeeds: "ui.placeholderSeeds",
+  placeholderTokenCreate: "ui.placeholderTokenCreate",
+  placeholderToken: "ui.placeholderToken",
+
+  selectSendWho: "ui.selectSendWho",
+  inputSendTo: "ui.inputSendTo",
+  placeholderMessage: "ui.placeholderMessage",
+
+  broadcastDefault: "ui.broadcastDefault",
+  broadcastAll: "ui.broadcastAll",
+  broadcastLabel: "ui.broadcastLabel",
+  selectBroadcastGroup: "ui.selectBroadcastGroup",
+  inputBroadcastTo: "ui.inputBroadcastTo",
+
+  selectLabelOp: "ui.selectLabelOp",
+  labelOpList: "ui.labelOpList",
+  labelOpAdd: "ui.labelOpAdd",
+  labelOpRemove: "ui.labelOpRemove",
+  inputLabelsAdd: "ui.inputLabelsAdd",
+  inputLabelsRemove: "ui.inputLabelsRemove",
+  placeholderCommaSeparated: "ui.placeholderCommaSeparated",
+
+  selectTeamOp: "ui.selectTeamOp",
+  teamOpList: "ui.teamOpList",
+  teamOpJoin: "ui.teamOpJoin",
+  teamOpCreate: "ui.teamOpCreate",
+  teamOpLeave: "ui.teamOpLeave",
+
+  modeBrokerNeedUrl: "ui.modeBrokerNeedUrl",
+  modeMeshNeedSeeds: "ui.modeMeshNeedSeeds",
+  modeSwimNeedSeeds: "ui.modeSwimNeedSeeds",
+
+  selectReplyTitle: "ui.selectReplyTitle",
+  replyOff: "ui.replyOff",
+  replyRemind: "ui.replyRemind",
+  replyMirror: "ui.replyMirror",
+
+  acDefaultGroup: "ui.acDefaultGroup",
+  acAll: "ui.acAll",
+  acGroup: "ui.acGroup",
+  acKnownConfig: "ui.acKnownConfig",
+  acNodeName: "ui.acNodeName",
+  acLabels: "ui.acLabels",
+});
+
+/** /team lang 命令的汇报文案与来源标签。 */
+const lang = Object.freeze({
+  report: "lang.report",
+  set: "lang.set",
+  setUnpersisted: "lang.setUnpersisted",
+  invalid: "lang.invalid",
+  unsupported: "lang.unsupported",
+  usage: "lang.usage",
+  source: Object.freeze({
+    flag: "lang.source.flag",
+    env: "lang.source.env",
+    config: "lang.source.config",
+    lcAll: "lang.source.lcAll",
+    lcMessages: "lang.source.lcMessages",
+    lang: "lang.source.lang",
+    intl: "lang.source.intl",
+    session: "lang.source.session",
+  }),
+});
+
 const options = Object.freeze({
   help: "options.help",
   urlInvalid: "options.urlInvalid",
@@ -257,6 +370,10 @@ export const M = Object.freeze({
   mode,
   transport,
   options,
+  flag,
+  command,
+  ui,
+  lang,
 });
 
 export default M;

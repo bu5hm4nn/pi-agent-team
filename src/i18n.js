@@ -31,7 +31,7 @@ import { zhHans } from "./locales/zh-Hans.js";
 const DEFAULT_LOCALE = "en-US";
 
 /** 目前支持的目录。加语言时同时加目录文件和这里。 */
-const SUPPORTED_LOCALES = Object.freeze(["zh-Hans", "en-US"]);
+export const SUPPORTED_LOCALES = Object.freeze(["zh-Hans", "en-US"]);
 
 const CATALOGS = Object.freeze({
   "zh-Hans": zhHans,
@@ -109,6 +109,37 @@ function firstNonEmpty(values) {
 }
 
 /**
+ * 把一个 locale 值归类到某个受支持的目录;判定与 resolveLocale 完全一致。
+ * 供 /team lang 在写配置前校验用户输入用 —— 不受支持时返回 null,
+ * 而不是像 setLocale 那样静默回退。
+ *
+ * @param {unknown} raw
+ * @returns {string|null}
+ */
+export function classifyLocale(raw) {
+  return classify(raw, SUPPORTED_LOCALES);
+}
+
+/**
+ * 把 Pi 的 `--team-lang` flag 值并入启动期 resolveLocale 的 env。
+ *
+ * flag 不在 process.env 里,只能由调用方以 env.teamLang 传入;抽成函数
+ * 是为了可测:index.ts 进不了单测,而"flag 到底有没有送到检测链顶端"
+ * 必须有断言,否则 env.teamLang 就是死代码。
+ *
+ * 没有 flag 时写入 null(firstNonEmpty 会跳过),绝不会用空串伪造一个
+ * 覆盖把 shell 信号压掉。
+ *
+ * @param {unknown} flagValue  pi.getFlag("team-lang") 的返回值
+ * @param {Record<string, unknown>} [env]  通常传 process.env
+ * @returns {Record<string, unknown>}
+ */
+export function startupLocaleEnv(flagValue, env = {}) {
+  const lang = typeof flagValue === "string" && flagValue.trim() !== "" ? flagValue : null;
+  return { ...env, teamLang: lang };
+}
+
+/**
  * 解析生效语言。先命中先赢:
  *
  *   1. `--team-lang`(调用方以 `env.teamLang` 传入,因为它是 Pi 的 flag,
@@ -128,19 +159,51 @@ function firstNonEmpty(values) {
  * @returns {string} 一定是受支持的 locale(zh-Hans 或 en-US)
  */
 export function resolveLocale(env = {}, config = {}) {
+  return resolveLocaleInfo(env, config).locale;
+}
+
+/**
+ * resolveLocale 的可观测版本:除了生效 locale,还报告它是**从哪来**的,
+ * 供 `/team lang` 汇报。source 是机器码(index.ts 再用 t() 渲染):
+ *
+ *   "flag"        命令行 --team-lang / env.teamLang
+ *   "env"         TEAM_LANG
+ *   "config"      team 配置的 lang 字段
+ *   "lc_all"      shell 的 LC_ALL
+ *   "lc_messages" shell 的 LC_MESSAGES
+ *   "lang"        shell 的 LANG
+ *   "intl"        宿主 Intl DateTimeFormat
+ *
+ * unsupported 表示显式/探测到的值不在支持列表里、已回退 en-US。
+ *
+ * @param {Record<string, unknown>} [env]
+ * @param {{ lang?: string }|null} [config]
+ * @returns {{ locale: string, source: string, value: string, unsupported: boolean }}
+ */
+export function resolveLocaleInfo(env = {}, config = {}) {
   const override = firstNonEmpty([env.teamLang, env["team-lang"], env.TEAM_LANG, config?.lang]);
   if (override) {
+    const source = firstNonEmpty([env.teamLang, env["team-lang"]]) ? "flag"
+      : firstNonEmpty([env.TEAM_LANG]) ? "env"
+        : "config";
     const picked = classify(override, SUPPORTED_LOCALES);
-    if (picked) return picked;
+    if (picked) return { locale: picked, source, value: override, unsupported: false };
     defaultWarn(`i18n: 不支持的语言 "${override}",回退到 ${DEFAULT_LOCALE}`);
-    return DEFAULT_LOCALE;
+    return { locale: DEFAULT_LOCALE, source, value: override, unsupported: true };
   }
 
   const detected = firstNonEmpty([env.LC_ALL, env.LC_MESSAGES, env.LANG]);
-  if (detected) return classify(detected, SUPPORTED_LOCALES) ?? DEFAULT_LOCALE;
+  if (detected) {
+    const source = firstNonEmpty([env.LC_ALL]) ? "lc_all"
+      : firstNonEmpty([env.LC_MESSAGES]) ? "lc_messages"
+        : "lang";
+    const picked = classify(detected, SUPPORTED_LOCALES);
+    return { locale: picked ?? DEFAULT_LOCALE, source, value: detected, unsupported: picked === null };
+  }
 
-  const fromIntl = classify(Intl.DateTimeFormat().resolvedOptions().locale, SUPPORTED_LOCALES);
-  return fromIntl ?? DEFAULT_LOCALE;
+  const intlRaw = Intl.DateTimeFormat().resolvedOptions().locale;
+  const fromIntl = classify(intlRaw, SUPPORTED_LOCALES);
+  return { locale: fromIntl ?? DEFAULT_LOCALE, source: "intl", value: intlRaw, unsupported: fromIntl === null };
 }
 
 /**
