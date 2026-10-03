@@ -19,6 +19,8 @@
 import { createBrokerTransport } from "./transport.js";
 import { createMeshTransport } from "./transport-mesh.js";
 import { createSwimTransport, sidecarAvailable } from "./transport-swim.js";
+import { t } from "./i18n.js";
+import { M } from "./messages.js";
 
 export const MODES = ["broker", "mesh", "swim"];
 
@@ -26,7 +28,7 @@ export const MODES = ["broker", "mesh", "swim"];
 export function resolveMode({ config = {}, env = process.env } = {}) {
   const raw = env.TEAM_MODE ?? config.mode ?? "broker";
   if (!MODES.includes(raw)) {
-    return { ok: false, reason: `TEAM_MODE 只能是 ${MODES.join(" / ")},实际 "${raw}"` };
+    return { ok: false, reason: t(M.mode.invalid, { modes: MODES.join(" / "), value: raw }) };
   }
   return { ok: true, mode: raw };
 }
@@ -50,12 +52,12 @@ export function createTransport({
   sidecarPath = null,
 }) {
   const token = config?.token;
-  if (!token) return { ok: false, reason: "缺少 token" };
+  if (!token) return { ok: false, reason: t(M.mode.missingToken) };
 
   switch (mode) {
     case "broker": {
       if (!config.url) {
-        return { ok: false, reason: "broker 模式需要 url。用 /team create <team> <url> 或 /team join <team> <url> <token>" };
+        return { ok: false, reason: t(M.mode.brokerNeedsUrl) };
       }
       return {
         ok: true,
@@ -71,9 +73,7 @@ export function createTransport({
         return {
           ok: true,
           transport: createMeshTransport({ token, seeds, listenHost, listenPort, advertiseHost }),
-          warning:
-            "mesh 模式没有配置 seeds:本节点要等别人主动连你才会被看到。" +
-            "配一个 seeds 就能双向发现。",
+          warning: t(M.mode.meshNoSeeds),
         };
       }
       return { ok: true, transport: createMeshTransport({ token, seeds, listenHost, listenPort, advertiseHost }) };
@@ -83,10 +83,7 @@ export function createTransport({
       if (!sidecarAvailable(sidecarPath)) {
         return {
           ok: false,
-          reason:
-            "swim 模式需要边车可执行文件,但没找到。构建方式:" +
-            "cd swim && go build -o ../.tmp/swim-sidecar . " +
-            "或设置 PI_TEAM_SWIM_SIDECAR 指向它。",
+          reason: t(M.mode.swimSidecarMissing),
         };
       }
       return {
@@ -103,7 +100,7 @@ export function createTransport({
     }
 
     default:
-      return { ok: false, reason: `未知模式 "${mode}"` };
+      return { ok: false, reason: t(M.mode.unknown, { mode }) };
   }
 }
 
@@ -123,21 +120,21 @@ export function toSocketUrl(url) {
  * 该模式的配置是否完整。给 /team 命令做提示用,不抛异常。
  */
 export function modeReadiness(mode, config = {}, sidecarPath = null) {
-  if (!config?.token) return { ready: false, reason: "缺少 token" };
+  if (!config?.token) return { ready: false, reason: t(M.mode.missingToken) };
   switch (mode) {
     case "broker":
       return config.url
         ? { ready: true }
-        : { ready: false, reason: "broker 模式需要 url" };
+        : { ready: false, reason: t(M.mode.brokerNeedsUrlShort) };
     case "mesh":
       return normalizeSeeds(config.seeds).length
         ? { ready: true }
-        : { ready: true, warning: "没有 seeds,只能被动等待别人连你" };
+        : { ready: true, warning: t(M.mode.meshNoSeedsShort) };
     case "swim":
       return sidecarAvailable(sidecarPath)
         ? { ready: true }
-        : { ready: false, reason: "找不到 SWIM 边车可执行文件" };
+        : { ready: false, reason: t(M.mode.swimSidecarNotFound) };
     default:
-      return { ready: false, reason: `未知模式 ${mode}` };
+      return { ready: false, reason: t(M.mode.unknownNoQuote, { mode }) };
   }
 }

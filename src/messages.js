@@ -177,8 +177,73 @@ const dispatch = Object.freeze({
   replyLegacy: "dispatch.reply.legacy",
 });
 
+const session = Object.freeze({
+  noMatch: "session.noMatch",
+  noPeers: "session.noPeers",
+  peerJoined: "session.peerJoined",
+  peerJoinedWithHost: "session.peerJoinedWithHost",
+  undeliverable: "session.undeliverable",
+  undeliverableGroup: "session.undeliverableGroup",
+  undeliverableUnknown: "session.undeliverableUnknown",
+  undeliverableRecipient: "session.undeliverableRecipient",
+  undeliverableNoRecipients: "session.undeliverableNoRecipients",
+  unknownReason: "session.unknownReason",
+  deliveredPartial: "session.deliveredPartial",
+  deliveredFailed: "session.deliveredFailed",
+  deliveredUnknown: "session.deliveredUnknown",
+  deliveredSummary: "session.deliveredSummary",
+  pendingOverflow: "session.pendingOverflow",
+  peerOfflinePending: "session.peerOfflinePending",
+  remindedStillPending: "session.remindedStillPending",
+  replyReason: "session.replyReason",
+  targetAll: "session.targetAll",
+  targetDefault: "session.targetDefault",
+});
+
+const config = Object.freeze({
+  teamNameInvalid: "config.teamNameInvalid",
+  agentNameInvalid: "config.agentNameInvalid",
+  modeInvalid: "config.modeInvalid",
+  urlInvalid: "config.urlInvalid",
+  brokerNeedsUrl: "config.brokerNeedsUrl",
+  teamExists: "config.teamExists",
+  tokenNotHex: "config.tokenNotHex",
+  teamUnknownKnown: "config.teamUnknownKnown",
+  teamUnknownNeedsToken: "config.teamUnknownNeedsToken",
+  teamUnknown: "config.teamUnknown",
+});
+
+const mode = Object.freeze({
+  invalid: "mode.invalid",
+  missingToken: "mode.missingToken",
+  brokerNeedsUrl: "mode.brokerNeedsUrl",
+  brokerNeedsUrlShort: "mode.brokerNeedsUrlShort",
+  meshNoSeeds: "mode.meshNoSeeds",
+  meshNoSeedsShort: "mode.meshNoSeedsShort",
+  swimSidecarMissing: "mode.swimSidecarMissing",
+  swimSidecarNotFound: "mode.swimSidecarNotFound",
+  unknown: "mode.unknown",
+  unknownNoQuote: "mode.unknownNoQuote",
+});
+
+const transport = Object.freeze({
+  swimSidecarMissing: "transport.swimSidecarMissing",
+});
+
 const options = Object.freeze({
   help: "options.help",
+  urlInvalid: "options.urlInvalid",
+  tokenTooShort: "options.tokenTooShort",
+  modeInvalid: "options.modeInvalid",
+  seedsEmpty: "options.seedsEmpty",
+  seedInvalid: "options.seedInvalid",
+  nameInvalid: "options.nameInvalid",
+  portInvalid: "options.portInvalid",
+  listenInvalid: "options.listenInvalid",
+  labelsTooMany: "options.labelsTooMany",
+  missingToken: "options.missingToken",
+  brokerNeedsUrl: "options.brokerNeedsUrl",
+  meshNoSeeds: "options.meshNoSeeds",
 });
 
 export const M = Object.freeze({
@@ -187,6 +252,10 @@ export const M = Object.freeze({
   status,
   tool,
   dispatch,
+  session,
+  config,
+  mode,
+  transport,
   options,
 });
 

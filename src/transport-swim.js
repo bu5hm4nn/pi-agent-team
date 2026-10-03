@@ -29,6 +29,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createMeshTransport, resolveTargets } from "./transport-mesh.js";
 import { createEmitter } from "./transport.js";
+import { t } from "./i18n.js";
+import { M } from "./messages.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -98,9 +100,7 @@ export function createSwimTransport({
     if (!binary) {
       setState("offline", {
         reason: "sidecar_missing",
-        message:
-          "找不到 SWIM 边车。构建:进入包的 swim/ 目录执行 go build -o ../swim-sidecar . ," +
-          "或用 PI_TEAM_SWIM_SIDECAR 指到构建产物。",
+        message: t(M.transport.swimSidecarMissing),
       });
       return false;
     }

@@ -21,6 +21,9 @@
  * 这样每个场景都能用几行测试覆盖,不需要起 Pi、不需要起 broker。
  */
 
+import { t } from "./i18n.js";
+import { M } from "./messages.js";
+
 /** 跳数上限:最后一道防线,正常对话形状不应碰到它 */
 const MAX_HOPS = 4;
 
@@ -183,11 +186,11 @@ export function applyRoster(s, body) {
  *   (空)              → "@default"   默认组
  */
 export function parseRecipients(raw) {
-  const t = String(raw ?? "").trim();
-  if (!t) return "@default";
-  if (t === "all" || t === "*") return "*";
+  const text = String(raw ?? "").trim();
+  if (!text) return "@default";
+  if (text === "all" || text === "*") return "*";
 
-  const parts = t
+  const parts = text
     .split(",")
     .map((x) => {
       const v = x.trim();
@@ -219,15 +222,15 @@ export function resolveLocal(s, to) {
 
   for (const raw of requested) {
     if (typeof raw !== "string") continue;
-    const t = raw.trim();
-    if (!t) continue;
+    const expr = raw.trim();
+    if (!expr) continue;
 
-    if (t === "*" || t === "@default") {
+    if (expr === "*" || expr === "@default") {
       for (const m of mine) targets.add(m.name);
       continue;
     }
-    if (t.startsWith("@")) {
-      const label = t.slice(1);
+    if (expr.startsWith("@")) {
+      const label = expr.slice(1);
       let hit = 0;
       for (const m of mine) {
         if ((m.labels ?? []).includes(label)) {
@@ -235,14 +238,14 @@ export function resolveLocal(s, to) {
           hit++;
         }
       }
-      if (hit === 0) unknown.push(t);
+      if (hit === 0) unknown.push(expr);
       continue;
     }
-    if (!mine.some((m) => m.name === t)) {
-      unknown.push(t);
+    if (!mine.some((m) => m.name === expr)) {
+      unknown.push(expr);
       continue;
     }
-    targets.add(t);
+    targets.add(expr);
   }
 
   return { targets: [...targets], unknown };
@@ -264,8 +267,8 @@ export function sendMessage(s, { to, text, hops = 0, re = null, origin = "user",
         type: "notify",
         level: "warning",
         message: targets.unknown.length
-          ? `没有匹配的收件人(${targets.unknown.join(",")})`
-          : "没有其他节点在线",
+          ? t(M.session.noMatch, { targets: targets.unknown.join(",") })
+          : t(M.session.noPeers),
       },
     ];
   }
@@ -282,7 +285,11 @@ export function sendMessage(s, { to, text, hops = 0, re = null, origin = "user",
 function formatTarget(to) {
   if (Array.isArray(to)) return to.join(",");
   // 显示用规范写法 @,不转成 # —— 用户输入的是 @,回显成 # 会让人以为要改写法
-  return to === "*" ? "全员" : to === "@default" ? "默认组" : String(to).replace(/^#/, "@");
+  return to === "*"
+    ? t(M.session.targetAll)
+    : to === "@default"
+      ? t(M.session.targetDefault)
+      : String(to).replace(/^#/, "@");
 }
 
 // ---------------------------------------------------------------- 入站
@@ -367,7 +374,9 @@ export function handleIncoming(s, env, now = Date.now()) {
           actions.push({
             type: "notify",
             level: "info",
-            message: `team:${body.peer} 上线${m?.host ? ` (${m.host})` : ""}`,
+            message: m?.host
+              ? t(M.session.peerJoinedWithHost, { peer: body.peer, host: m.host })
+              : t(M.session.peerJoined, { peer: body.peer }),
           });
         }
         return actions;
@@ -378,7 +387,10 @@ export function handleIncoming(s, env, now = Date.now()) {
           {
             type: "notify",
             level: "warning",
-            message: `team:发给 ${String(body.to ?? "?")} 失败 —— ${describeUndeliverable(body)}`,
+            message: t(M.session.undeliverable, {
+              to: String(body.to ?? "?"),
+              reason: describeUndeliverable(body),
+            }),
           },
         ];
 
@@ -387,10 +399,16 @@ export function handleIncoming(s, env, now = Date.now()) {
         const failed = Array.isArray(body.failed) ? body.failed : [];
         const unknown = Array.isArray(body.unknown) ? body.unknown : [];
         if (!failed.length && !unknown.length) return [];
-        const parts = [`投递 ${body.delivered}/${body.total}`];
-        if (failed.length) parts.push(`写入失败:${failed.join(",")}`);
-        if (unknown.length) parts.push(`未知:${unknown.join(",")}`);
-        return [{ type: "notify", level: "warning", message: `team:${parts.join(" · ")}` }];
+        const parts = [t(M.session.deliveredPartial, { delivered: body.delivered, total: body.total })];
+        if (failed.length) parts.push(t(M.session.deliveredFailed, { failed: failed.join(",") }));
+        if (unknown.length) parts.push(t(M.session.deliveredUnknown, { unknown: unknown.join(",") }));
+        return [
+          {
+            type: "notify",
+            level: "warning",
+            message: t(M.session.deliveredSummary, { parts: parts.join(" · ") }),
+          },
+        ];
       }
 
       case "ping":
@@ -418,7 +436,7 @@ export function handleIncoming(s, env, now = Date.now()) {
         kind: cls.kind === "fyi" ? "send" : "receive",
         peer: env.from,
         text,
-        ...(cls.original ? { reason: `回复:${excerpt(cls.original, 60)}` } : {}),
+        ...(cls.original ? { reason: t(M.session.replyReason, { excerpt: excerpt(cls.original, 60) }) } : {}),
       },
     ];
   }
@@ -435,7 +453,7 @@ export function handleIncoming(s, env, now = Date.now()) {
         kind: "failed",
         peer: dropped.to,
         text: "",
-        reason: `待回复超过 ${MAX_PENDING_REPLIES} 条,${dropped.to} 的请求已被丢弃`,
+        reason: t(M.session.pendingOverflow, { count: MAX_PENDING_REPLIES, to: dropped.to }),
       });
     }
   }
@@ -447,12 +465,12 @@ export function handleIncoming(s, env, now = Date.now()) {
 function describeUndeliverable(body) {
   const unknown = Array.isArray(body.unknown) ? body.unknown : [];
   if (unknown.length && unknown.every((u) => String(u).startsWith("@"))) {
-    return `分组 ${unknown.join(",")} 里没有在线节点`;
+    return t(M.session.undeliverableGroup, { unknown: unknown.join(",") });
   }
-  if (unknown.length) return `找不到 ${unknown.join(",")}(不在线或名字写错)`;
-  if (body.reason === "unknown_recipient") return "收件人不在线或不存在";
-  if (body.reason === "no_recipients") return "没有可投递的对象";
-  return String(body.reason ?? "未知原因");
+  if (unknown.length) return t(M.session.undeliverableUnknown, { unknown: unknown.join(",") });
+  if (body.reason === "unknown_recipient") return t(M.session.undeliverableRecipient);
+  if (body.reason === "no_recipients") return t(M.session.undeliverableNoRecipients);
+  return body.reason ? String(body.reason) : t(M.session.unknownReason);
 }
 
 // ---------------------------------------------------------------- 出站决策
@@ -529,7 +547,7 @@ export function onTurnSettled(s) {
         kind: "failed",
         peer: p.to,
         text: "",
-        reason: `${p.to} 已离线,它的请求没有得到回复`,
+        reason: t(M.session.peerOfflinePending, { to: p.to }),
       });
       continue;
     }
@@ -554,7 +572,7 @@ export function onTurnSettled(s) {
       kind: "failed",
       peer: p.to,
       text: "",
-      reason: `已提醒一次但 ${p.to} 的请求仍未被回复`,
+      reason: t(M.session.remindedStillPending, { to: p.to }),
     });
   }
 
