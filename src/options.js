@@ -27,6 +27,8 @@
  */
 
 import { MODES } from "./mode.js";
+import { t } from "./i18n.js";
+import { M } from "./messages.js";
 
 /** team 级选项 → 落盘字段名 */
 const TEAM_KEYS = new Set(["url", "token", "mode", "seeds"]);
@@ -193,14 +195,12 @@ export function checkModeRequirements({ mode, url, seeds, token }) {
   return { ok: true };
 }
 
-/** 给 /team status 和帮助信息用的一行说明 */
-export const OPTION_HELP = [
-  "  --url <http://host:port>    broker 地址(broker 模式必需)",
-  "  --token <hex>               team token(必需)",
-  "  --mode <broker|mesh|swim>   投递模式(默认 broker)",
-  "  --seeds <host:port,...>     mesh/swim 的种子地址",
-  "  --name <名字>               本节点名(仅本次运行)",
-  "  --labels <a,b>              本节点标签(仅本次运行)",
-  "  --port <n>                  mesh/swim 监听端口(仅本次运行,0 = 自动)",
-  "  --listen <地址>             mesh/swim 监听地址(仅本次运行)",
-].join("\n");
+/**
+ * 给 /team status 和帮助信息用的一行说明。
+ *
+ * 做成函数而不是模块常量:常量在 import 时就冻住了,而 locale 是
+ * 启动期才 setLocale 选定的 —— 冻住的常量拿不到后选的 locale。
+ */
+export function optionHelp() {
+  return t(M.options.help);
+}

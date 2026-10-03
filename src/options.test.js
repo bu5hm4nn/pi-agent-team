@@ -15,6 +15,11 @@ import {
   parseSeeds,
   validateOptions,
 } from "./options.js";
+import { setLocale } from "./i18n.js";
+
+// 选项帮助文案现经由 t() 渲染;断言写的是中文目录的逐字文案,
+// 把 locale 钉在 zh-Hans(默认 locale 是 en-US)。
+setLocale("zh-Hans");
 
 // ---------------------------------------------------------------- 参数解析
 

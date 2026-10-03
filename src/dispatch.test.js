@@ -14,6 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BULK_WARN_THRESHOLD, dispatch, doSend, sendMessage } from "./dispatch.js";
 import { applyRoster, createSessionState } from "./session.js";
+import { setLocale } from "./i18n.js";
+
+// dispatch 的输出现在经由 t() 渲染。这些断言写的是中文目录的逐字文案,
+// 所以把 locale 钉在 zh-Hans —— 默认 locale 是 en-US,不钉就会拿到英文。
+setLocale("zh-Hans");
 
 const member = (name, over = {}) => ({
   name,

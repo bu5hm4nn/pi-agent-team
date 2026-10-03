@@ -22,8 +22,10 @@ import {
   teamSize,
 } from "./session.js";
 import { createTeam, joinTeam, leaveTeam, listTeams, readTeam } from "./team-config.js";
-import { OPTION_HELP, checkModeRequirements, parseOptionArgs, validateOptions } from "./options.js";
+import { optionHelp, checkModeRequirements, parseOptionArgs, validateOptions } from "./options.js";
 import { MODES } from "./mode.js";
+import { t } from "./i18n.js";
+import { M } from "./messages.js";
 
 /** 群发前确认阈值。每个收件人都会跑一轮完整思考,不该手滑就发生。 */
 export const BULK_WARN_THRESHOLD = 5;
@@ -118,14 +120,14 @@ export function dispatch(input, state, env) {
 
     case "on":
       state.reply = "remind";
-      return ok(["reply=remind(请求没被回复时提醒一次)"]);
+      return ok([t(M.dispatch.replyOn)]);
 
     case "off":
       state.reply = "off";
-      return ok(["reply=off(不提醒,发不发由模型自己决定)"]);
+      return ok([t(M.dispatch.replyOff)]);
 
     default:
-      return bad(`未知子命令 "${sub}"。直接运行 /team 打开菜单。`);
+      return bad(t(M.dispatch.unknownSubcommand, { sub }));
   }
 }
 
@@ -139,57 +141,76 @@ function statusLines(state, env) {
     // 这里说的是"本次连接属于哪个 team",和末尾"已存 team 列表"不是一回事。
     // 措辞要区分开,否则用环境变量连接时会同时看到"未加入"和"已存 dev",
     // 看起来自相矛盾(实测中确实被误读成一个 bug)。
-    `当前 team  ${env.team ?? "(未绑定,由环境变量直连)"}`,
-    `节点名     ${state.self || "(未设置)"}`,
-    `本机标签   ${state.selfLabels?.length ? state.selfLabels.join(", ") : "(无)"}`,
-    `模式       ${mode}`,
-    `连接       ${env.connState}`,
+    t(M.dispatch.statusTeam, {
+      team: env.team ?? t(M.dispatch.statusTeamUnbound),
+    }),
+    t(M.dispatch.statusName, { name: state.self || t(M.dispatch.statusNameUnset) }),
+    t(M.dispatch.statusLabels, {
+      labels: state.selfLabels?.length ? state.selfLabels.join(", ") : t(M.dispatch.none),
+    }),
+    t(M.dispatch.statusMode, { mode }),
+    t(M.dispatch.statusConnState, { state: env.connState }),
   ];
 
   if (mode === "broker") {
-    lines.push(`broker     ${cfg?.url ?? "(未配置)"}`);
+    lines.push(t(M.dispatch.statusBroker, { url: cfg?.url ?? t(M.dispatch.statusBrokerUnset) }));
   } else {
-    lines.push(`seeds      ${(cfg?.seeds ?? []).join(", ") || "(无,只能被动等待别人连你)"}`);
-    lines.push(`投递端口   ${env.listenPort ?? "(未就绪)"}`);
+    lines.push(
+      t(M.dispatch.statusSeeds, {
+        seeds: (cfg?.seeds ?? []).join(", ") || t(M.dispatch.statusSeedsNone),
+      }),
+    );
+    lines.push(
+      t(M.dispatch.statusListenPort, { port: env.listenPort ?? t(M.dispatch.statusNotReady) }),
+    );
 
     // 种子地址说的是哪个端口,取决于模式:
     //   mesh  直接连对端的投递端口
     //   swim  连对端的 gossip 端口,投递端口由成员信息带出来
     if (mode === "swim") {
-      lines.push(`gossip 端口 ${env.gossipPort ?? "(未就绪)"}`);
-      if (env.gossipPort) lines.push(`种子写法   <本机可达地址>:${env.gossipPort}`);
+      lines.push(
+        t(M.dispatch.statusGossipPort, { port: env.gossipPort ?? t(M.dispatch.statusNotReady) }),
+      );
+      if (env.gossipPort) lines.push(t(M.dispatch.statusSeedFormGossip, { port: env.gossipPort }));
     } else if (env.listenPort) {
-      lines.push(`种子写法   <本机可达地址>:${env.listenPort}`);
+      lines.push(t(M.dispatch.statusSeedFormListen, { port: env.listenPort }));
     }
   }
 
   lines.push(
-    `在线       ${teamSize(state)} 个节点(${othersOf(state).length} 个其他节点)`,
-    `回信策略   ${state.reply}`,
-    `已存 team  ${listTeams().join(", ") || "(无)"}`,
+    t(M.dispatch.statusOnline, { count: teamSize(state), others: othersOf(state).length }),
+    t(M.dispatch.statusReply, { reply: state.reply }),
+    t(M.dispatch.statusTeams, { teams: listTeams().join(", ") || t(M.dispatch.none) }),
   );
   return lines;
 }
 
 function peersResult(state) {
   const list = othersOf(state);
-  if (!list.length) return { ok: true, lines: [`只有你自己在线(${state.self})`], intentions: [] };
+  if (!list.length) {
+    return { ok: true, lines: [t(M.dispatch.peersOnlySelf, { self: state.self })], intentions: [] };
+  }
 
   const lines = [];
   const byHost = new Map();
   for (const m of list) {
-    const k = m.host ?? "(未知主机)";
+    const k = m.host ?? t(M.dispatch.peersHostUnknown);
     if (!byHost.has(k)) byHost.set(k, []);
     byHost.get(k).push(m);
   }
   for (const [host, arr] of [...byHost].sort((a, b) => a[0].localeCompare(b[0]))) {
-    lines.push(`${host}  (${arr.length})`);
+    lines.push(t(M.dispatch.peersHostGroup, { host, count: arr.length }));
     for (const m of [...arr].sort((x, y) => x.name.localeCompare(y.name))) {
-      lines.push(`  ${m.name}${m.labels?.length ? `  [${m.labels.join(" ")}]` : ""}`);
+      const labels = m.labels?.length
+        ? t(M.dispatch.peersMemberLabels, { labels: m.labels.join(" ") })
+        : "";
+      lines.push(t(M.dispatch.peersMember, { name: m.name, labels }));
     }
   }
   const labels = knownLabels(state);
-  if (labels.length) lines.push("", `可用分组:${labels.map((l) => `@${l}`).join(" ")}`);
+  if (labels.length) {
+    lines.push("", t(M.dispatch.peersGroups, { groups: labels.map((l) => `@${l}`).join(" ") }));
+  }
   return ok(lines);
 }
 
@@ -209,23 +230,30 @@ function missingTeamName(sub, parsed) {
   if (given.length) {
     // 给了选项但没给名字:这是最容易犯的错,要直接点出来
     lines.push(
-      `缺少 team 名。你给了 ${given.map((k) => `--${k}`).join(" ")},但 team 名要放在最前面:`,
+      t(M.dispatch.missingTeamGivenIntro, { options: given.map((k) => `--${k}`).join(" ") }),
       "",
-      `  /team ${sub} <team名> ${given.map((k) => `--${k} …`).join(" ")}`,
+      t(M.dispatch.missingTeamGivenUsage, {
+        sub,
+        options: given.map((k) => `--${k} …`).join(" "),
+      }),
     );
   } else {
-    lines.push(`缺少 team 名。`, "", `  /team ${sub} <team名> [选项]`);
+    lines.push(t(M.dispatch.missingTeamNone), "", t(M.dispatch.missingTeamUsage, { sub }));
   }
 
   const known = listTeams();
   if (sub === "join" && known.length) {
-    lines.push("", `本机已有:${known.join(", ")}`, `已配置过的 team 直接 /team join ${known[0]} 就行,不用再给 url 和 token。`);
+    lines.push(
+      "",
+      t(M.dispatch.missingTeamKnown, { known: known.join(", ") }),
+      t(M.dispatch.missingTeamKnownHint, { team: known[0] }),
+    );
   }
   if (sub === "create") {
-    lines.push("", "team 名只能用小写字母和数字,例如 dev、prod2。");
+    lines.push("", t(M.dispatch.missingTeamCreateNameRule));
   }
 
-  lines.push("", "选项:", OPTION_HELP);
+  lines.push("", t(M.dispatch.missingTeamOptionsHeading), optionHelp());
   return lines.join("\n");
 }
 
@@ -233,7 +261,9 @@ function createResult(args, state) {
   // 位置形式(/team create t <url> [token])和选项形式都接受。
   // 位置形式保留是因为它用了很久,选项形式是为了设置 mode/seeds。
   const parsed = parseOptionArgs(args);
-  if (parsed.unknown.length) return bad(`认不出的选项:${parsed.unknown.join(", ")}\n${OPTION_HELP}`);
+  if (parsed.unknown.length) {
+    return bad(`${t(M.dispatch.unknownOptions, { options: parsed.unknown.join(", ") })}\n${optionHelp()}`);
+  }
 
   const [team, posUrl, posToken] = parsed.rest;
   if (!team) return bad(missingTeamName("create", parsed));
@@ -250,7 +280,7 @@ function createResult(args, state) {
     mode,
     url: v.team.url,
     seeds: v.team.seeds,
-    token: v.team.token ?? "(待生成)",
+    token: v.team.token ?? "(to-be-generated)",
   });
   if (!req.ok) return bad(req.reason);
 
@@ -263,13 +293,16 @@ function createResult(args, state) {
   });
   if (!r.ok) return bad(r.reason);
 
-  const lines = [`已创建 team "${team}"  →  ${r.path}`, `模式: ${r.config.mode}`];
-  if (r.config.url) lines.push(`broker: ${r.config.url}`);
-  if (r.config.seeds?.length) lines.push(`seeds: ${r.config.seeds.join(", ")}`);
-  if (req.warning) lines.push("", `注意:${req.warning}`);
+  const lines = [
+    t(M.dispatch.createCreated, { team, path: r.path }),
+    t(M.dispatch.modeLine, { mode: r.config.mode }),
+  ];
+  if (r.config.url) lines.push(t(M.dispatch.brokerLine, { url: r.config.url }));
+  if (r.config.seeds?.length) lines.push(t(M.dispatch.seedsLine, { seeds: r.config.seeds.join(", ") }));
+  if (req.warning) lines.push("", t(M.dispatch.warning, { warning: req.warning }));
 
   if (r.created) {
-    lines.push("", "生成的 token(只显示这一次,配置文件里也有一份):", r.token);
+    lines.push("", t(M.dispatch.createTokenGenerated), r.token);
   }
 
   // create 只写本地配置、让本机去连。它不启动任何东西。
@@ -282,7 +315,7 @@ function createResult(args, state) {
       try {
         return new URL(r.config.url).hostname;
       } catch {
-        return "<broker 所在机器>";
+        return t(M.dispatch.createBrokerHostUnknown);
       }
     })();
     const port = (() => {
@@ -294,22 +327,31 @@ function createResult(args, state) {
     })();
     lines.push(
       "",
-      `下一步:broker 需要你自己在 ${host} 上启动 —— /team create 不会替你启动它。`,
-      "在那台机器上运行(只需要 Node,不需要 Pi):",
+      t(M.dispatch.createBrokerNextStep, { host }),
+      t(M.dispatch.createBrokerRunIntro),
       "",
-      `  TEAM_TOKEN='${r.token}' npx -y -p @yiki21/pi-agent-team pi-agent-team-broker --bind ${host} --port ${port}`,
+      t(M.dispatch.createBrokerCommand, { token: r.token, host, port }),
       "",
-      "token 必须和这里一致,否则 broker 会拒绝连接。",
-      "要常驻运行,见 docs/systemd.md。",
+      t(M.dispatch.createBrokerTokenNote),
+      t(M.dispatch.createBrokerSystemd),
     );
   }
 
   lines.push(
     "",
-    "其它机器用这条加入:",
-    `  /team join ${team} --url ${r.config.url ?? "<url>"} --token ${r.token}${
-      r.config.mode !== "broker" ? ` --mode ${r.config.mode}` : ""
-    }`,
+    t(M.dispatch.createJoinIntro),
+    r.config.mode !== "broker"
+      ? t(M.dispatch.createJoinCommandMode, {
+          team,
+          url: r.config.url ?? "<url>",
+          token: r.token,
+          mode: r.config.mode,
+        })
+      : t(M.dispatch.createJoinCommand, {
+          team,
+          url: r.config.url ?? "<url>",
+          token: r.token,
+        }),
   );
   // 创建后直接连上,省得用户再敲一次 join
   return ok(lines, {
@@ -324,7 +366,9 @@ function createResult(args, state) {
 
 function joinResult(args, state) {
   const parsed = parseOptionArgs(args);
-  if (parsed.unknown.length) return bad(`认不出的选项:${parsed.unknown.join(", ")}\n${OPTION_HELP}`);
+  if (parsed.unknown.length) {
+    return bad(`${t(M.dispatch.unknownOptions, { options: parsed.unknown.join(", ") })}\n${optionHelp()}`);
+  }
 
   const [team, posUrl, posToken] = parsed.rest;
   if (!team) return bad(missingTeamName("join", parsed));
@@ -358,12 +402,15 @@ function joinResult(args, state) {
   });
   if (!r.ok) return bad(r.reason);
 
-  const lines = [`加入 team "${team}"`, `模式: ${r.config.mode}`];
-  if (r.config.url) lines.push(`broker: ${r.config.url}`);
-  if (r.config.seeds?.length) lines.push(`seeds: ${r.config.seeds.join(", ")}`);
-  if (r.adopted) lines.push("(首次加入,已记到本机配置)");
-  if (r.updated) lines.push("(配置已更新)");
-  if (req.warning) lines.push("", `注意:${req.warning}`);
+  const lines = [
+    t(M.dispatch.joinJoined, { team }),
+    t(M.dispatch.modeLine, { mode: r.config.mode }),
+  ];
+  if (r.config.url) lines.push(t(M.dispatch.brokerLine, { url: r.config.url }));
+  if (r.config.seeds?.length) lines.push(t(M.dispatch.seedsLine, { seeds: r.config.seeds.join(", ") }));
+  if (r.adopted) lines.push(t(M.dispatch.joinAdopted));
+  if (r.updated) lines.push(t(M.dispatch.joinUpdated));
+  if (req.warning) lines.push("", t(M.dispatch.warning, { warning: req.warning }));
 
   return ok(lines, {
     party: {
@@ -382,27 +429,29 @@ function modeResult(args, state, env) {
   if (!want) {
     const current = env.mode ?? env.config?.mode ?? "broker";
     return ok([
-      `当前模式:${current}`,
+      t(M.dispatch.modeCurrent, { mode: current }),
       "",
-      "切换:",
-      "  /team mode broker   经 broker 中转,需要 url",
-      "  /team mode mesh     节点直连,需要 seeds",
-      "  /team mode swim     SWIM 管成员 + 直连投递,需要 seeds 和边车",
+      t(M.dispatch.modeSwitchHeading),
+      t(M.dispatch.modeHelpBroker),
+      t(M.dispatch.modeHelpMesh),
+      t(M.dispatch.modeHelpSwim),
       "",
-      "只切换模式不会动 url / token / seeds —— 它们在 team 配置里。",
-      "需要改那些就用 /team join <team> --url ... --token ...。",
+      t(M.dispatch.modeNote1),
+      t(M.dispatch.modeNote2),
     ]);
   }
 
-  if (!MODES.includes(want)) return bad(`模式只能是 ${MODES.join(" / ")},实际 "${want}"`);
+  if (!MODES.includes(want)) {
+    return bad(t(M.dispatch.modeInvalid, { modes: MODES.join(" / "), value: want }));
+  }
 
   const team = env.team;
   if (!team) {
-    return bad("还没绑定 team,无法保存模式。用 /team join <team> --mode " + want + " ...");
+    return bad(t(M.dispatch.modeNoTeam, { mode: want }));
   }
 
   const existing = readTeam(team);
-  if (!existing) return bad(`本地没有 team "${team}" 的配置`);
+  if (!existing) return bad(t(M.dispatch.modeNoConfig, { team }));
 
   const req = checkModeRequirements({
     mode: want,
@@ -415,9 +464,9 @@ function modeResult(args, state, env) {
   const r = joinTeam({ team, mode: want });
   if (!r.ok) return bad(r.reason);
 
-  const lines = [`模式已切换:${existing.mode ?? "broker"} → ${want}`];
-  if (req.warning) lines.push("", `注意:${req.warning}`);
-  if (want === "swim") lines.push("", "swim 需要边车:cd swim && go build -o ../.tmp/swim-sidecar .");
+  const lines = [t(M.dispatch.modeSwitched, { from: existing.mode ?? "broker", to: want })];
+  if (req.warning) lines.push("", t(M.dispatch.warning, { warning: req.warning }));
+  if (want === "swim") lines.push("", t(M.dispatch.modeSwimSidecar));
 
   return ok(lines, { party: { kind: "connect", team, config: r.config, session: sessionFrom(state) } });
 }
@@ -432,11 +481,11 @@ function sessionFrom(state) {
 
 function leaveResult(args, state, env) {
   const target = args[0] ?? env.team;
-  if (!target) return bad("用法:/team leave <team>");
+  if (!target) return bad(t(M.dispatch.leaveUsage));
 
   const r = leaveTeam({ team: target });
   if (!r.ok) return bad(r.reason);
-  return ok([`已离开 team "${target}"(本地配置已删)`], { party: { kind: "disconnect" } });
+  return ok([t(M.dispatch.leaveLeft, { team: target })], { party: { kind: "disconnect" } });
 }
 
 // ---------------------------------------------------------------- label
@@ -446,22 +495,30 @@ function labelResult(args, state, env) {
   const labels = new Set(state.selfLabels ?? []);
 
   if (!op || op === "list") {
-    return ok([`本机标签:${labels.size ? [...labels].join(", ") : "(无)"}`]);
+    return ok([
+      t(M.dispatch.labelCurrent, {
+        labels: labels.size ? [...labels].join(", ") : t(M.dispatch.none),
+      }),
+    ]);
   }
 
   if (op === "add" || op === "remove" || op === "rm") {
     const names = rest.filter(Boolean);
-    if (!names.length) return bad(`用法:/team label ${op} <名字...>`);
+    if (!names.length) return bad(t(M.dispatch.labelUsageOp, { op }));
     for (const l of names) (op === "add" ? labels.add(l) : labels.delete(l));
     state.selfLabels = [...labels];
 
-    const lines = [`标签已更新:${state.selfLabels.join(", ") || "(无)"}`];
+    const lines = [
+      t(M.dispatch.labelUpdated, {
+        labels: state.selfLabels.join(", ") || t(M.dispatch.none),
+      }),
+    ];
     // 标签是 broker 侧的分组依据,改了必须重连它才知道
-    if (env.connState === "online") lines.push("(标签变了,正在重连 broker)");
+    if (env.connState === "online") lines.push(t(M.dispatch.labelReconnect));
     return ok(lines, { party: { kind: "reconnect", labels: state.selfLabels } });
   }
 
-  return bad("用法:/team label [list|add <名字...>|remove <名字...>]");
+  return bad(t(M.dispatch.labelUsage));
 }
 
 // ---------------------------------------------------------------- send
@@ -469,7 +526,7 @@ function labelResult(args, state, env) {
 function sendResult(args, state, env, input = {}) {
   const rawTo = args[0];
   const text = args.slice(1).join(" ");
-  if (!rawTo || !text) return bad("用法:/team send <名字|@分组|*|@default|a,b> <内容>");
+  if (!rawTo || !text) return bad(t(M.dispatch.sendUsage));
 
   // origin 以前写死成 "user",连 team_send 工具也是 —— 于是模型发出的消息
   // 被记成人发的,对方回复时只显示卡片,模型永远看不到那条回复。
@@ -491,17 +548,25 @@ export function sendMessage(rawTo, text, origin, state, env) {
   if (local.targets.length === 0) {
     return bad(
       local.unknown.length
-        ? `没有匹配的收件人(${local.unknown.join(",")})`
-        : "没有其他节点在线",
+        ? t(M.dispatch.sendNoMatch, { targets: local.unknown.join(",") })
+        : t(M.dispatch.sendNoPeers),
     );
   }
 
   const isBulk =
     to === "*" || to === "@default" || Array.isArray(to) || (typeof to === "string" && to.startsWith("@"));
   if (isBulk && local.targets.length > BULK_WARN_THRESHOLD) {
-    return ok([`准备群发给 ${local.targets.length} 个节点:${local.targets.join(", ")}`], {
-      party: { kind: "confirmBulk", n: local.targets.length, to, text, origin },
-    });
+    return ok(
+      [
+        t(M.dispatch.sendBulk, {
+          count: local.targets.length,
+          targets: local.targets.join(", "),
+        }),
+      ],
+      {
+        party: { kind: "confirmBulk", n: local.targets.length, to, text, origin },
+      },
+    );
   }
 
   return doSend(to, text, origin, local, state, env);
@@ -538,12 +603,14 @@ export function doSend(to, text, origin, local, state, env) {
   const over = oversizeBy(text);
   if (over) {
     return bad(
-      `消息太长,发不出去:${over.bytes} 字节(单条上限约 ${over.limit - ENVELOPE_HEADROOM} 字节)。` +
-        `把它拆成几条,或者改成让对端自己去读文件。`,
+      t(M.dispatch.sendOversize, {
+        bytes: over.bytes,
+        limit: over.limit - ENVELOPE_HEADROOM,
+      }),
     );
   }
 
-  if (env.connState !== "online") return bad("未连接,消息没发出去");
+  if (env.connState !== "online") return bad(t(M.dispatch.sendNotConnected));
 
   const id = newId();
   // 记下 origin:对方回复时靠它判断"模型知道这回事吗"
@@ -554,8 +621,10 @@ export function doSend(to, text, origin, local, state, env) {
   // 会互相触发下去,只能靠跳数上限兜住。
   const { replyTo, re, hops } = bindReply(state, local.targets);
 
-  const lines = [`已发给 ${formatTarget(to)}(${local.targets.length} 个节点)`];
-  if (replyTo) lines.push(`(作为对 ${replyTo} 那条请求的回复)`);
+  const lines = [
+    t(M.dispatch.sendSent, { to: formatTarget(to), count: local.targets.length }),
+  ];
+  if (replyTo) lines.push(t(M.dispatch.sendAsReply, { id: replyTo }));
 
   return ok(lines, {
     intentions: [
@@ -571,8 +640,8 @@ export function doSend(to, text, origin, local, state, env) {
 
 function formatTarget(to) {
   if (Array.isArray(to)) return to.join(",");
-  if (to === "*") return "全员";
-  if (to === "@default") return "默认组";
+  if (to === "*") return t(M.dispatch.targetAll);
+  if (to === "@default") return t(M.dispatch.targetDefault);
   return String(to).replace(/^#/, "@");
 }
 
@@ -593,30 +662,36 @@ function replyResult(args, state, sub = "reply") {
   const raw = args[0];
   if (!raw) {
     return ok([
-      `当前 reply=${state.reply}`,
+      t(M.dispatch.replyCurrent, { reply: state.reply }),
       "",
-      "  off     不提醒 —— 消息照常送达,回不回由模型自己决定",
-      "  remind  请求没被回复时提醒一次(回复仍由模型显式用 team_send 发出)",
-      "  mirror  每轮输出都镜像给所有节点(fyi,不叫醒对方)",
+      t(M.dispatch.replyHelpOff),
+      t(M.dispatch.replyHelpRemind),
+      t(M.dispatch.replyHelpMirror),
       "",
-      `用法:/team ${sub} <off|remind|mirror>`,
+      t(M.dispatch.replyUsage, { sub }),
     ]);
   }
 
   const { mode, legacy } = normalizeReplyMode(raw);
   if (!mode) {
-    return bad(`模式只能是 ${REPLY_MODES.join(" / ")},实际 "${raw}"。当前 reply=${state.reply}`);
+    return bad(
+      t(M.dispatch.replyInvalid, {
+        modes: REPLY_MODES.join(" / "),
+        value: raw,
+        current: state.reply,
+      }),
+    );
   }
 
   state.reply = mode;
   const note =
     mode === "off"
-      ? "不提醒 —— 消息照常送达,是否需要回复完全由模型决定"
+      ? t(M.dispatch.replyNoteOff)
       : mode === "remind"
-        ? "请求没得到回复时提醒一次"
-        : "每轮输出都镜像给所有节点(fyi,不叫醒对方)";
+        ? t(M.dispatch.replyNoteRemind)
+        : t(M.dispatch.replyNoteMirror);
 
-  const lines = [`reply=${mode}`, note];
-  if (legacy) lines.push(`(旧名字 "${raw}" 仍可用,但现在叫 "${mode}")`);
+  const lines = [t(M.dispatch.replySet, { mode }), note];
+  if (legacy) lines.push(t(M.dispatch.replyLegacy, { old: raw, mode }));
   return ok(lines);
 }
