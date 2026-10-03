@@ -47,10 +47,13 @@ signal.
 back to the `en-US` value (the base), then to the key itself, and warns once in
 dev/test.
 
-Rollout: the framework lands with the effective default still `zh-Hans`, so the
-existing Chinese output and its tests stay byte-identical; story 17 flips the
-default to `en-US` once the English catalog is complete. That flip is the deliberate
-behaviour change this wave ships.
+`en-US` is the default from day one: the framework never stages the default behind a
+later flip. Instead the catalog-completeness test enforces key parity **per commit**,
+so a call site can only be migrated (stories 14-16) once its English string exists and
+has been reviewed. There is therefore no window in which the English default leaks a
+raw key. The legacy tests keep their Chinese assertions by pinning the locale
+(`setLocale("zh-Hans")`, or `TEAM_LANG=zh-Hans` in the npm script), which doubles as
+the proof that the Chinese catalog is intact.
 
 ## Evidence
 
@@ -72,8 +75,8 @@ this story.
 
 - `resolveLocale` returns `en-US` for unset / `en*` / unknown locales, and
   `zh-Hans` for `zh*`.
-- During rollout the effective default is still `zh-Hans`, so the full suite passes
-  unchanged; story 17 flips the default and adds the en-default assertions.
+- The default (no override, no `zh*`) resolves to `en-US`; the full suite stays
+  green because it pins `zh-Hans`, and story 17 adds the en-default assertions.
 - A catalog-completeness test: identical key sets and matching `{placeholders}`
   across locales.
 - A `resolveLocale` unit test covering the full chain, POSIX normalization, the

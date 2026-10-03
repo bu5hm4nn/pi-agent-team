@@ -7,13 +7,13 @@
 
 ## What
 
-Complete `src/locales/en-US.js` for every extracted key. English is the base and
-the default, so a missing en key is a defect, not a fallback: **flip the effective
-default to `en-US` here**, re-baseline the default-locale expectations to English,
-and pin the legacy Chinese assertions to `zh-Hans`. Add the guards: a
-catalog-completeness test (identical key sets, matching `{placeholders}`, no empty
-values), a dual-locale test run over a representative subset, and a dependency-free
-grep guard that flags new CJK literals in user-facing sink positions
+Complete `src/locales/en-US.js` for every extracted key. The default is already
+`en-US` (story 13), so this story completes the catalog and its guards rather than
+flipping anything: add any remaining keys, add the en-default and `zh-Hans` regression
+assertions, and keep the legacy Chinese assertions pinned to `zh-Hans`. Add the
+guards: a catalog-completeness test (identical key sets, matching `{placeholders}`,
+no empty values), a dual-locale test run over a representative subset, and a
+dependency-free grep guard that flags new CJK literals in user-facing sink positions
 (`ctx.ui.notify`, dispatch `lines.push`, `description:`) against a reviewed
 allowlist — not a blanket CJK scan, which would flag the comments.
 
