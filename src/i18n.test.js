@@ -148,6 +148,42 @@ test("t():按 Intl.PluralRules 选 _one / _other", () => {
   assert.equal(t(M.notify.files, { count: 2 }), "2 个文件");
 });
 
+test("复数守卫:M 里带 {count} 的键在 count=1/5 下都解析成文案(不吐裸键)", () => {
+  const leaves = [];
+  const walk = (obj) => {
+    for (const v of Object.values(obj)) {
+      if (v && typeof v === "object") walk(v);
+      else leaves.push(v);
+    }
+  };
+  walk(M);
+
+  const hasCount = (v) => typeof v === "string" && v.includes("{count}");
+  const countKeys = leaves.filter(
+    (base) => hasCount(enUS[base]) || hasCount(enUS[`${base}_one`]) || hasCount(enUS[`${base}_other`]),
+  );
+
+  // 前置条件:已知的三个复数键必须在列,否则守卫本身没覆盖到目标。
+  assert.ok(countKeys.includes(M.tool.moreLines), "tool.moreLines 应带 {count}");
+  assert.ok(countKeys.includes(M.tool.cardMoreLines), "tool.cardMoreLines 应带 {count}");
+  assert.ok(countKeys.includes(M.notify.files), "notify.files 应带 {count}");
+
+  for (const locale of ["en-US", "zh-Hans"]) {
+    setLocale(locale);
+    for (const base of countKeys) {
+      for (const count of [1, 5]) {
+        const out = t(base, { count });
+        assert.ok(
+          !out.startsWith(base) && !out.startsWith("tool.") && !out.startsWith("notify."),
+          `${locale}: t(${base}, { count: ${count} }) 返回了裸键:${out}`,
+        );
+        assert.ok(out.includes(String(count)), `${locale}: t(${base}, { count: ${count} }) 应插值 count`);
+      }
+    }
+  }
+  setLocale("en-US");
+});
+
 test("t():getLocale/setLocale 作用于单例", () => {
   setLocale("zh-Hans");
   assert.equal(getLocale(), "zh-Hans");

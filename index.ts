@@ -516,7 +516,7 @@ export default function (pi: ExtensionAPI) {
     if (!expanded && lines.length > 6) text += "\n" + theme.fg("dim", `  ${t(M.tool.cardMoreLines, { count: lines.length - 6 })}`);
     if (d?.reason) text += "\n" + theme.fg(m.color, `  ${d.reason}`);
 
-    const box = new Box(0, 1, (t) => theme.bg("customMessageBg", t));
+    const box = new Box(0, 1, (line) => theme.bg("customMessageBg", line));
     box.addChild(new Text(text, 0, 0));
     return box;
   });
@@ -1004,7 +1004,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (sub === "join" && rest.length === 0) {
-        return listTeams().map((t) => ({ value: t, label: t, description: "本机已有配置" }));
+        return listTeams().map((name) => ({ value: name, label: name, description: "本机已有配置" }));
       }
 
       // join / create / mode 的选项补全 —— 否则这些选项只能靠记。
