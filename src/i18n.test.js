@@ -167,6 +167,11 @@ test("复数守卫:M 里带 {count} 的键在 count=1/5 下都解析成文案(�
   assert.ok(countKeys.includes(M.tool.moreLines), "tool.moreLines 应带 {count}");
   assert.ok(countKeys.includes(M.tool.cardMoreLines), "tool.cardMoreLines 应带 {count}");
   assert.ok(countKeys.includes(M.notify.files), "notify.files 应带 {count}");
+  // 分发输出的带 {count} 基础键也要在列 —— 它们同样是复数键,守卫必须覆盖。
+  assert.ok(countKeys.includes(M.dispatch.statusOnline), "dispatch.status.online 应带 {count}");
+  assert.ok(countKeys.includes(M.dispatch.peersHostGroup), "dispatch.peers.hostGroup 应带 {count}");
+  assert.ok(countKeys.includes(M.dispatch.sendBulk), "dispatch.send.bulk 应带 {count}");
+  assert.ok(countKeys.includes(M.dispatch.sendSent), "dispatch.send.sent 应带 {count}");
 
   for (const locale of ["en-US", "zh-Hans"]) {
     setLocale(locale);
