@@ -299,19 +299,19 @@ function createResult(args, state) {
       const uri = buildPunchUri({ name: team, topic: existing.topic, token: existing.token });
       return ok(
         [
-          `team "${team}" 已存在(hyperswarm)—— 这是它的 punch URI,可直接复制:`,
+          t(M.dispatch.createExistsHyperswarm, { team }),
           "",
           uri,
           "",
-          "新机器一条命令加入:",
+          t(M.dispatch.createPunchJoinIntroShort),
           `  TEAM_PUNCH='${uri}' pi`,
-          `或在本机:/team join ${uri}`,
+          t(M.dispatch.createPunchJoinLocal, { uri }),
         ],
         { party: { kind: "connect", team, config: existing, session: v.session } },
       );
     }
     return bad(
-      `team "${team}" 已存在(模式 ${existing.mode ?? "broker"})。用 /team join ${team} 加入,或先 /team leave ${team}。`,
+      t(M.dispatch.createExistsOther, { team, mode: existing.mode ?? "broker" }),
     );
   }
 
@@ -338,13 +338,13 @@ function createResult(args, state) {
     const uri = buildPunchUri({ name: team, topic: r.config.topic, token: r.token });
     lines.push(
       "",
-      "punch URI(复制这一条;它带着 room 的 topic 和 token):",
+      t(M.dispatch.createPunchHeading),
       "",
       uri,
       "",
-      "新机器一条命令加入(只需要 Node 和 Pi):",
+      t(M.dispatch.createPunchJoinIntro),
       `  TEAM_PUNCH='${uri}' pi`,
-      `或在本机:/team join ${uri}`,
+      t(M.dispatch.createPunchJoinLocal, { uri }),
     );
     // 创建后直接连上,省得用户再敲一次 join
     return ok(lines, {
@@ -500,7 +500,7 @@ function modeResult(args, state, env) {
       t(M.dispatch.modeHelpBroker),
       t(M.dispatch.modeHelpMesh),
       t(M.dispatch.modeHelpSwim),
-      "  /team mode hyperswarm  无服务器(DHT 打洞),需要 topic — 通常直接用 punch URI 加入",
+      t(M.dispatch.modeHelpHyperswarm),
       "",
       t(M.dispatch.modeNote1),
       t(M.dispatch.modeNote2),

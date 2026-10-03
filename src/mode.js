@@ -111,7 +111,7 @@ export function createTransport({
       if (!resolvedTopic) {
         return {
           ok: false,
-          reason: "hyperswarm 模式需要 topic(32 字节)。它由 punch URI 生成,先执行 /team create 或 /team join <punch URI>。",
+          reason: t(M.mode.hyperswarmNeedsTopic),
         };
       }
       // 可选原生依赖缺失时明确失败,不拖垮其它模式。
@@ -167,7 +167,7 @@ export function modeReadiness(mode, config = {}, sidecarPath = null) {
       // Buffer/Uint8Array(测试与调用方都可能直接给字节)。
       return normalizeTopic(config.topic)
         ? { ready: true }
-        : { ready: false, reason: "hyperswarm 模式需要 topic(32 字节)" };
+        : { ready: false, reason: t(M.mode.hyperswarmNeedsTopicShort) };
     default:
       return { ready: false, reason: t(M.mode.unknownNoQuote, { mode }) };
   }
