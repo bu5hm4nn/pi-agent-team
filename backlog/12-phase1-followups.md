@@ -88,6 +88,13 @@ or a recorded reason, not a silent change.
   `validateTeamName`'s own message disagrees again. Fix both locales together, as a
   scoped copy change (the council flagged it during the story-15 translation
   review; do not silently fix English alone).
+- **U9 — the swim sidecar path is inconsistent in the source.** `mode.swimSidecarMissing`
+  names `../.tmp/swim-sidecar` while `transport.swimSidecarMissing` names
+  `../swim-sidecar`. Both locales mirror the discrepancy faithfully; fix the source
+  once so the two messages agree.
+- **U10 — name-length limits disagree.** `config.teamNameInvalid` allows 1-32
+  characters while `options.nameInvalid` allows 1-64. Reconcile the source validator
+  and both locales.
 
 ## Already tracked elsewhere
 

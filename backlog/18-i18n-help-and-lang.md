@@ -11,7 +11,12 @@ Localize the human-visible help surfaces: `registerFlag` and `registerCommand`
 descriptions. Add the `/team lang` command to report and set the effective locale
 and its source. The override surface (`TEAM_LANG`, `--team-lang`, the team-config
 `lang` field, `/team lang`) is **internal** — an escape hatch noted in the
-changelog, not published as public API. Setting `/team lang` persists and takes effect on the next reload, because
+changelog, not published as public API.
+
+Also localize the tool execute-result text that `index.ts` still emits as hardcoded
+Chinese (e.g. `失败:${error}`, `发送失败:…`, and the `ui.input`/`ui.select` prompts).
+Those results are user-visible, and they are the largest remaining `en-US` gap
+outside the model-facing payload (story 20). Setting `/team lang` persists and takes effect on the next reload, because
 registration descriptions are frozen at extension load.
 
 Out of scope this wave: tool `description` and parameter descriptions for the

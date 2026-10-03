@@ -86,7 +86,7 @@ phases:
       explicit override, then the shell locale (LC_ALL > LC_MESSAGES > LANG),
       then Intl; Pi exposes no locale API, so install detection is a documented
       non-goal. Code comments stay Chinese.
-    stories: ["13", "14", "15", "16", "17", "18", "19"]
+    stories: ["13", "14", "15", "16", "17", "18", "19", "20"]
 
 decisions:
   - id: phased-mesh-first
@@ -209,13 +209,14 @@ numbering:
   - "17"
   - "18"
   - "19"
+  - "20"
 
 # Urgency bands. Phase 1 is implemented; what remains is hardening (12), the
 # i18n wave (13-18) and Phases 2-3.
 urgency:
   now: []
   next: ["12", "13"]
-  later: ["04", "05", "07b", "09", "10", "11", "14", "15", "16", "17", "18", "19"]
+  later: ["04", "05", "07b", "09", "10", "11", "14", "15", "16", "17", "18", "19", "20"]
   only-if: []
 
 dependencies:
@@ -231,6 +232,7 @@ dependencies:
     - "10 -> 09 — room-scoped tools need the room registry"
     - "11 -> 06, 09 — isolation is asserted against the token gate and the registry"
     - "19 -> 13, 01, 02, 03, 06, 07a, 08 — the stack above i18n localizes the Phase 1 additions"
+    - "20 -> 13, 16 — the model-facing payload is a mechanism change over the migrated session"
     - "14 -> 13 — the index.ts UI sinks call t()"
     - "15 -> 14 — dispatch output shares the catalog with the UI"
     - "16 -> 15 — session, config and transport errors share the same catalog"
@@ -387,4 +389,11 @@ stories:
     status: queued
     file: backlog/19-i18n-hyperswarm-strings.md
     depends_on: ["13", "01", "02", "03", "06", "07a", "08"]
+    owner_decision: null
+  - id: "20"
+    title: "i18n — locale-aware model-facing payload and prompts"
+    area: i18n
+    status: queued
+    file: backlog/20-i18n-model-facing-payload.md
+    depends_on: ["13", "16"]
     owner_decision: null
