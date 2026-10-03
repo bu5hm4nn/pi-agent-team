@@ -31,8 +31,12 @@ function captureWarn(fn) {
 
 // ---------------------------------------------------------------- resolveLocale
 
-test("resolveLocale:默认是 en-US(没有任何信号时)", () => {
-  assert.equal(resolveLocale({}, {}), "en-US");
+test("resolveLocale:没有 zh 信号时回退 en-US(不依赖宿主 Intl)", () => {
+  // 显式给一个既非 zh、也没有目录的语言,证明未知 locale 静默回退英文。
+  // 不用空 env:空 env 会落到 Intl.DateTimeFormat().resolvedOptions().locale,
+  // 结果随宿主 locale 而变(zh 宿主上会解析成 zh-Hans),那是宿主耦合的偶合,
+  // 不是本测试要证明的确定行为。Intl 回退分支由下面"都没有时看 Intl"自适应覆盖。
+  assert.equal(resolveLocale({ LANG: "fr_FR.UTF-8" }, {}), "en-US", "未知语言应回退 en-US");
 });
 
 test("resolveLocale:链的顺序 --team-lang > TEAM_LANG > config.lang", () => {
@@ -73,6 +77,7 @@ test("resolveLocale:链的顺序 config.lang > LC_ALL > LC_MESSAGES > LANG", () 
 });
 
 test("resolveLocale:都没有时看 Intl", () => {
+  // 唯一允许宿主耦合的地方:期望值直接从宿主 Intl 派生,任何宿主下都自洽。
   const intl = Intl.DateTimeFormat().resolvedOptions().locale;
   const expected = intl.toLowerCase().startsWith("zh") ? "zh-Hans" : "en-US";
   assert.equal(resolveLocale({}, {}), expected);
@@ -93,12 +98,12 @@ test("resolveLocale:zh* 都选 zh-Hans(含 zh-Hant 降级)", () => {
   }
 });
 
-test("resolveLocale:en* / 未设 / 未知语言都选 en-US", () => {
+test("resolveLocale:en* 与未知语言都选 en-US", () => {
   for (const raw of ["en", "en-US", "en_GB.UTF-8"]) {
     assert.equal(resolveLocale({ LANG: raw }, {}), "en-US", `${raw} 应选 en-US`);
   }
-  assert.equal(resolveLocale({}, {}), "en-US", "未设应选 en-US");
-  assert.equal(resolveLocale({ LANG: "" }, {}), "en-US", "空串应选 en-US");
+  // "未设"与"空串"都会落到宿主 Intl.DateTimeFormat,结果随宿主 locale 变;
+  // 该分支由上面"都没有时看 Intl"自适应验证,这里只断言显式非 zh 信号。
   assert.equal(resolveLocale({ LANG: "fr_FR.UTF-8" }, {}), "en-US", "未知语言应选 en-US");
   assert.equal(resolveLocale({ LANG: "de-DE" }, {}), "en-US", "未知语言应选 en-US");
 });
@@ -293,7 +298,7 @@ test("双语言覆盖:同一批键在 zh-Hans 下含中文(两份目录确实不
 });
 
 test("双语言覆盖:默认 locale(无覆盖、非 zh*)解析为 en-US", () => {
-  assert.equal(resolveLocale({}, {}), "en-US", "没有任何信号时默认英文");
+  // 不用空 env:空 env 会落到宿主 Intl,结果随宿主 locale 变(见文件顶部说明)。
   assert.equal(resolveLocale({ LANG: "en_US.UTF-8" }, {}), "en-US");
   assert.equal(resolveLocale({ LANG: "fr_FR.UTF-8" }, {}), "en-US", "没有目录的语言也回退英文");
   assert.equal(createTranslator().getLocale(), "en-US", "无 locale 的翻译器默认 en-US");
