@@ -54,9 +54,9 @@
     "src/ws.js"
   ],
   "scripts": {
-    "test": "node --test --test-timeout=30000 src/ e2e/",
-    "test:unit": "node --test --test-timeout=30000 src/",
-    "test:e2e": "node --test --test-timeout=30000 e2e/",
+    "test": "node --test --test-timeout=30000 \"src/**/*.test.js\" \"e2e/**/*.test.js\"",
+    "test:unit": "node --test --test-timeout=30000 \"src/**/*.test.js\"",
+    "test:e2e": "node --test --test-timeout=30000 \"e2e/**/*.test.js\"",
     "broker": "node broker.mjs",
     "build:sidecar": "cd swim && go build -o ../.tmp/swim-sidecar ."
   },

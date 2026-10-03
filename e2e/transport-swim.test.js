@@ -97,10 +97,15 @@ async function swimHarness(t) {
   return { create, teardown };
 }
 
-conformanceSuite({
-  name: "swim",
-  makeHarness: (t) => swimHarness(t),
-});
+// 边车缺失时整套 conformance 必须一起跳过。这个调用会同步注册一批
+// test(),所以 if 必须包住调用本身 —— 否则没有边车的开发环境里,
+// 仓库级 npm test 会被这批必然失败的用例挂死。
+if (AVAILABLE) {
+  conformanceSuite({
+    name: "swim",
+    makeHarness: (t) => swimHarness(t),
+  });
+}
 
 // ---------------------------------------------------------------- SWIM 特有
 
