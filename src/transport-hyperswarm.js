@@ -571,7 +571,12 @@ export function createHyperswarmTransport({
         // DHT 不可达时不能永远卡在 connecting,超时也上线(孤立节点可用)。
         await Promise.race([
           discovery.flushed().catch(() => {}),
-          new Promise((r) => setTimeout(r, flushTimeoutMs)),
+          new Promise((r) => {
+            // 兜底定时器要 unref:flushed() 先完成时它会被遗弃,
+            // 若还挂在事件循环上,每个节点都会把进程多吊住 flushTimeoutMs。
+            const t = setTimeout(r, flushTimeoutMs);
+            t.unref?.();
+          }),
         ]);
       } catch (err) {
         setState("offline", { reason: "join_failed", message: String(err?.message ?? err) });
