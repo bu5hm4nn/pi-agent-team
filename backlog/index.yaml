@@ -1,5 +1,5 @@
 version: 1
-updated: 2026-10-02
+updated: 2026-10-03
 entry_point: backlog/index.yaml
 
 # Story areas, and what each means.
@@ -11,6 +11,7 @@ areas:
   tests: the shared conformance suite and its coverage of a new transport
   docs: README, how-it-works and roadmap for the new mode and the punch URI
   ops: provisioning a fresh, often ephemeral and rented, worker with the fewest moving parts
+  i18n: localization of the extension's user-facing output inside Pi (catalogs, locale detection)
 
 mission: >-
   Let several machines running the Pi coding agent work as one team with the
@@ -75,6 +76,17 @@ phases:
       construction (distinct topics); a session in project A never sees project
       B's nodes. This is the end goal, deliberately last.
     stories: ["09", "10", "11"]
+  - id: 4
+    name: "Internationalization"
+    goal: >-
+      The extension's runtime output inside Pi is localized, with English as the
+      base and the default: only a positive Chinese (zh*) locale selects the
+      zh-Hans catalog, because Pi itself is English-only. Chinese remains the
+      extraction source and a supported catalog. Language resolves from an
+      explicit override, then the shell locale (LC_ALL > LC_MESSAGES > LANG),
+      then Intl; Pi exposes no locale API, so install detection is a documented
+      non-goal. Code comments stay Chinese.
+    stories: ["13", "14", "15", "16", "17", "18"]
 
 decisions:
   - id: phased-mesh-first
@@ -139,6 +151,20 @@ decisions:
       lazily so broker/mesh/swim are unaffected when it is absent.
     date: 2026-10-02
     landed: null
+  - id: i18n-default-english
+    decision: >-
+      Internationalization uses a zero-dependency in-repo catalog. en-US is the
+      base and the default: any locale that does not positively match Chinese
+      (zh*) renders English, because Pi itself is English-only. Only a positive
+      zh* signal selects the zh-Hans catalog (zh-Hant degrades to zh-Hans, the
+      only Chinese catalog); an explicit override naming an unsupported locale
+      warns and falls back to en-US. Language resolves from --team-lang,
+      TEAM_LANG, the team-config lang field, then LC_ALL > LC_MESSAGES > LANG >
+      Intl; Pi exposes no locale API, so install detection is a non-goal. This
+      deliberately overrides the council's behavior-preserving zh-Hans default;
+      code comments stay Chinese. (Owner decision, 2026-10-03.)
+    date: 2026-10-03
+    landed: null
 
 open_decisions:
   - id: idle-gate-vs-turn-boundary
@@ -175,13 +201,20 @@ numbering:
   - "09"
   - "10"
   - "11"
+  - "12"
+  - "13"
+  - "14"
+  - "15"
+  - "16"
+  - "17"
+  - "18"
 
-# Urgency bands. These are the planner's initial placement, NOT a council pass.
-# Phase 1 owns `now` and `next`; everything else is `later` until the mesh lands.
+# Urgency bands. Phase 1 is implemented; what remains is hardening (12), the
+# i18n wave (13-18) and Phases 2-3.
 urgency:
-  now: ["01", "02", "06"]
-  next: ["03", "07a", "08"]
-  later: ["04", "05", "07b", "09", "10", "11"]
+  now: []
+  next: ["12", "13"]
+  later: ["04", "05", "07b", "09", "10", "11", "14", "15", "16", "17", "18"]
   only-if: []
 
 dependencies:
@@ -196,6 +229,12 @@ dependencies:
     - "09 -> 01, 02 — a session can only hold many rooms once one room works serverless"
     - "10 -> 09 — room-scoped tools need the room registry"
     - "11 -> 06, 09 — isolation is asserted against the token gate and the registry"
+    - "13 -> 01, 02, 03, 06, 07a, 08 — the i18n wave rebases on the whole Phase 1 output surface"
+    - "14 -> 13 — the index.ts UI sinks call t()"
+    - "15 -> 14 — dispatch output shares the catalog with the UI"
+    - "16 -> 15 — session, config and transport errors share the same catalog"
+    - "17 -> 13, 14, 15, 16 — the en-US catalog must cover every extracted key"
+    - "18 -> 17 — help/description localization and /team lang land after the catalog is bilingual"
   verification_prerequisites:
     - "01, 02, 03, 06 and 11 need two reachable nodes for a live check; the conformance suite is the in-repo substitute for cross-network tests and must pass before any live claim."
 
@@ -291,4 +330,53 @@ stories:
     status: queued
     file: backlog/11-room-isolation.md
     depends_on: ["06", "09"]
+    owner_decision: null
+  - id: "12"
+    title: "follow-ups — transport hardening, auth polish, coverage and UX"
+    area: transport
+    status: queued
+    file: backlog/12-phase1-followups.md
+    depends_on: ["01", "02", "03", "06"]
+    owner_decision: null
+  - id: "13"
+    title: "i18n core — catalogs, t(), shell-locale detection"
+    area: i18n
+    status: queued
+    file: backlog/13-i18n-core.md
+    depends_on: ["01", "02", "03", "06", "07a", "08"]
+    owner_decision: null
+  - id: "14"
+    title: "i18n — migrate the index.ts UI sinks"
+    area: i18n
+    status: queued
+    file: backlog/14-i18n-index-ui.md
+    depends_on: ["13"]
+    owner_decision: null
+  - id: "15"
+    title: "i18n — migrate dispatch output and option help"
+    area: i18n
+    status: queued
+    file: backlog/15-i18n-dispatch.md
+    depends_on: ["14"]
+    owner_decision: null
+  - id: "16"
+    title: "i18n — migrate session, config and transport messages"
+    area: i18n
+    status: queued
+    file: backlog/16-i18n-session-config.md
+    depends_on: ["15"]
+    owner_decision: null
+  - id: "17"
+    title: "i18n — en-US catalog, completeness test, dual-locale CI"
+    area: i18n
+    status: queued
+    file: backlog/17-i18n-en-catalog.md
+    depends_on: ["13", "14", "15", "16"]
+    owner_decision: null
+  - id: "18"
+    title: "i18n — help/description localization, /team lang and overrides"
+    area: i18n
+    status: queued
+    file: backlog/18-i18n-help-and-lang.md
+    depends_on: ["17"]
     owner_decision: null
