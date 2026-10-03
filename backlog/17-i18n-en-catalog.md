@@ -32,4 +32,6 @@ Fill the en catalog; add the three tests. No code changes outside the catalog.
 - The completeness test fails if a key is removed from either catalog or a
   placeholder drifts.
 - The guard test fails on a new untranslated user-facing literal.
-- English strings are flagged for human copy review (they are LLM-drafted).
+- English strings are LLM-drafted and then reviewed by the three-seat council
+  (the owner cannot validate the Chinese source); that review gates the default
+  flip to `en-US`.

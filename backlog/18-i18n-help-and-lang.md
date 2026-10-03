@@ -9,8 +9,9 @@
 
 Localize the human-visible help surfaces: `registerFlag` and `registerCommand`
 descriptions. Add the `/team lang` command to report and set the effective locale
-and its source, and document `TEAM_LANG`, `--team-lang` and the team-config `lang`
-field. Setting `/team lang` persists and takes effect on the next reload, because
+and its source. The override surface (`TEAM_LANG`, `--team-lang`, the team-config
+`lang` field, `/team lang`) is **internal** — an escape hatch noted in the
+changelog, not published as public API. Setting `/team lang` persists and takes effect on the next reload, because
 registration descriptions are frozen at extension load.
 
 Out of scope this wave: tool `description` and parameter descriptions for the
