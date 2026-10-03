@@ -238,6 +238,67 @@ test("t():生产环境不打印缺键警告", () => {
   }
 });
 
+// ---------------------------------------------------------------- 双语言覆盖
+
+/**
+ * 代表性的用户可见路径:每个命名空间挑一两条,断言 en-US 真的渲染
+ * 英文。zh-Hans 的逐字断言由各测试文件自己 setLocale("zh-Hans") 钉住
+ * (见 dispatch.test.js / mode.test.js / options.test.js),那是对"中文
+ * 目录未被改动"的字节级回归证明;这里补的是 en 侧。
+ */
+const EN_CASES = [
+  [M.notify.greeting, { name: "Ada" }, "Hello, Ada"],
+  [M.notify.files, { count: 2 }, "2 files"],
+  [M.notify.sendFailed, undefined, "team: not connected, the message was not sent"],
+  [M.tool.delivered, { to: "bob" }, "✓ delivered to bob"],
+  [M.tool.currentTeam, undefined, "(current)"],
+  [M.tool.moreLines, { count: 3 }, "…3 more lines"],
+  [M.status.replaced, { name: "n" }, "⚠️ team:n (replaced)"],
+  [M.dispatch.none, undefined, "(none)"],
+  [M.dispatch.statusMode, { mode: "broker" }, "mode         broker"],
+  [M.dispatch.sendNotConnected, undefined, "not connected, the message was not sent"],
+  [M.dispatch.sendBulk, { count: 3, targets: "a,b,c" }, "About to send to 3 nodes: a,b,c"],
+  [M.dispatch.modeCurrent, { mode: "mesh" }, "current mode: mesh"],
+  [M.dispatch.peersHostGroup, { host: "h", count: 2 }, "h  (2)"],
+  [M.session.peerJoined, { peer: "bob" }, "team: bob is online"],
+  [M.session.deliveredPartial, { delivered: 1, total: 2 }, "delivered 1/2"],
+  [M.session.remindedStillPending, { to: "bob" }, "reminded once, but the request from bob is still unanswered"],
+  [M.config.modeInvalid, { modes: "broker|mesh|swim", value: "x" }, 'mode must be broker|mesh|swim, got "x"'],
+  [M.mode.unknownNoQuote, { mode: "x" }, "unknown mode x"],
+  [M.options.tokenTooShort, undefined, "token is too short (at least 16 characters)"],
+  [M.reason.offline, undefined, "offline"],
+];
+
+const CJK_RE = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/;
+
+test("双语言覆盖:en-US 下代表性路径渲染英文,不吐裸键", () => {
+  setLocale("en-US");
+  assert.equal(getLocale(), "en-US");
+  for (const [key, params, want] of EN_CASES) {
+    const out = t(key, params);
+    assert.equal(out, want, `${key} 的 en-US 渲染`);
+    assert.notEqual(out, key, `${key} 不应吐裸键`);
+    assert.ok(!CJK_RE.test(out), `en-US 的输出不应含中文:${key} => ${out}`);
+  }
+});
+
+test("双语言覆盖:同一批键在 zh-Hans 下含中文(两份目录确实不同)", () => {
+  setLocale("zh-Hans");
+  for (const key of [M.notify.greeting, M.notify.sendFailed, M.tool.delivered, M.config.modeInvalid, M.options.tokenTooShort]) {
+    const entry = EN_CASES.find(([k]) => k === key);
+    const out = t(key, entry[1]);
+    assert.ok(CJK_RE.test(out), `zh-Hans 的输出应含中文:${key} => ${out}`);
+  }
+  setLocale("en-US");
+});
+
+test("双语言覆盖:默认 locale(无覆盖、非 zh*)解析为 en-US", () => {
+  assert.equal(resolveLocale({}, {}), "en-US", "没有任何信号时默认英文");
+  assert.equal(resolveLocale({ LANG: "en_US.UTF-8" }, {}), "en-US");
+  assert.equal(resolveLocale({ LANG: "fr_FR.UTF-8" }, {}), "en-US", "没有目录的语言也回退英文");
+  assert.equal(createTranslator().getLocale(), "en-US", "无 locale 的翻译器默认 en-US");
+});
+
 // ---------------------------------------------------------------- 目录守卫
 
 const catalogKeys = (cat) => Object.keys(cat).sort();
