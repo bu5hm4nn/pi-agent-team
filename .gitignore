@@ -13,8 +13,6 @@ node_modules/
 *token*
 !src/**/token*.js
 !src/**/token*.ts
-# backlog 故事文件是文档,即便名字含 token 也必须入库
-!backlog/*.md
 
 # 编辑器 / 系统
 .DS_Store
