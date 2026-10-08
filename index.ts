@@ -35,6 +35,7 @@ import { M } from "./src/messages.js";
 import { MODES, createTransport, modeReadiness, normalizeSeeds, resolveMode } from "./src/mode.js";
 import { parsePunchUri, punchFromEnv } from "./src/options.js";
 import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, teamSize, applyRoster, TEAM_MESSAGE_TYPE } from "./src/session.js";
+import { MEMBERSHIP_TYPE, makeJoinRecord, makeLeaveRecord, reduceMembership } from "./src/membership.js";
 import { normalizeReplyMode } from "./src/dispatch.js";
 import { createTeam, joinTeam, leaveTeam, listTeams, readTeam, toSocketUrl, writeTeam } from "./src/team-config.js";
 import { BULK_WARN_THRESHOLD, dispatch, doSend, sendMessage } from "./src/dispatch.js";
@@ -63,6 +64,15 @@ let currentMode: string = "broker";
 let connState: ConnState = "offline";
 let currentTeam: string | null = null;
 let currentConfig: { url?: string; token: string; labels?: string[]; mode?: string; seeds?: string[]; topic?: string } | null = null;
+
+/**
+ * 当前生效的 join 记录的 id(UUID)。
+ *
+ * 它是成员关系的身份:leave 要引用它才能精确关闭这一次 join;
+ * 从持久化记录还原时沿用它,不新造 —— reload 不该改变身份,
+ * 也不该往分支上再堆一条 join。
+ */
+let currentJoinId: string | null = null;
 
 let ctxRef: ExtensionContext | null = null;
 let apiRef: ExtensionAPI | null = null;
@@ -264,21 +274,31 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
         party.team as string | null,
         party.config as { url: string; token: string; labels?: string[] },
         (party.session as { name?: string; labels?: string[]; port?: number; listen?: string }) ?? {},
+        { persist: true },
       );
       return true;
 
-    case "disconnect":
+    case "disconnect": {
+      // 引用当前分支上生效的那个 join,而不是随便造一个 —— 这样 leave
+      // 只关掉它真的加入过的那一次。
+      const active = reduceMembership(safeGetBranch(ctx));
+      const joinId = active?.id ?? currentJoinId;
+      const team = currentTeam;
       transport?.stop();
       transport = null;
       connState = "offline";
       currentTeam = null;
       currentConfig = null;
+      currentJoinId = null;
+      if (joinId) appendMembership(makeLeaveRecord({ joinId, team }));
       renderStatus();
       return true;
+    }
 
     case "reconnect": {
       const labels = party.labels as string[];
-      if (transport && currentConfig) connectWith(currentTeam, { ...currentConfig, labels });
+      // 标签变了也是一次新的 join 记录(新的身份),还原时才会拿到新标签。
+      if (transport && currentConfig) connectWith(currentTeam, { ...currentConfig, labels }, {}, { persist: true });
       return true;
     }
 
@@ -382,6 +402,132 @@ function fingerprintOf(token: string): string {
   return createHash("sha256").update(token).digest("hex").slice(0, 8);
 }
 
+// ---------------------------------------------------------------- 成员关系持久化
+
+/**
+ * 追加一条成员关系 custom 条目。
+ *
+ * custom 条目不进 LLM 上下文,但会跟着 session 的树一起走,所以在
+ * reload / resume / 分支切换后能从 getBranch 重建。写失败不能影响
+ * 已经建立的连接 —— 持久化只是“下次能自动还原”,不是连接的前提。
+ */
+function appendMembership(data: unknown): boolean {
+  if (!apiRef) return false;
+  try {
+    apiRef.appendEntry(MEMBERSHIP_TYPE, data);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 当前分支的条目(root → leaf)。拿不到就当空,不让它抛进生命周期。 */
+function safeGetBranch(ctx: ExtensionContext | null): unknown[] {
+  try {
+    return (ctx?.sessionManager as { getBranch?: () => unknown[] } | undefined)?.getBranch?.() ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 按持久化记录还原连接。
+ *
+ * 凭据永远来自本机已有的 team 配置,不来自条目 —— 条目里只有 team 名、
+ * 名字、标签、监听选项。拿不到配置就安全失败并给出本地化提示,**绝不**
+ * 退回连接别的 team。
+ */
+function restoreMembership(active: {
+  id: string;
+  team: string | null;
+  name?: string;
+  labels?: string[];
+  listen?: { host?: string | null; port?: number | null };
+}): boolean {
+  const ctx = ctxRef;
+
+  if (!active.team) {
+    // 用显式参数/环境变量直连(没有 team 名):本地没有可读的配置,
+    // 没法安全地重建凭据。说清楚,而不是静默什么都不做。
+    ctx?.ui.notify(t(M.notify.restoreDirect), "warning");
+    return false;
+  }
+
+  const cfg = readTeam(active.team);
+  if (!cfg) {
+    // 配置缺失/损坏:安全失败。用既有的本地化提示,不连别的 team。
+    ctx?.ui.notify(t(M.config.teamUnknown, { team: active.team }), "warning");
+    return false;
+  }
+
+  return connectWith(
+    active.team,
+    cfg,
+    {
+      name: active.name || undefined,
+      labels: Array.isArray(active.labels) ? active.labels : undefined,
+      listen: active.listen?.host ?? undefined,
+      port: typeof active.listen?.port === "number" ? active.listen.port : undefined,
+    },
+    { persist: false, joinId: active.id },
+  );
+}
+
+/**
+ * session_tree 时的重算:当前分支上还有没有生效的 join。
+ *
+ *   - 有且和当前连接是同一个 join → 不动
+ *   - 有但不同(或在别处)→ 按记录重连(保留身份,不追加)
+ *   - 没有而当前又连着 → 断开(分支已回到加入之前)
+ */
+function reconcileMembership(ctx: ExtensionContext): void {
+  const active = reduceMembership(safeGetBranch(ctx));
+
+  if (active) {
+    if (currentJoinId === active.id && transport) return;
+    restoreMembership(active);
+    return;
+  }
+
+  if (transport) {
+    const team = currentTeam;
+    transport.stop();
+    transport = null;
+    connState = "offline";
+    currentTeam = null;
+    currentConfig = null;
+    currentJoinId = null;
+    renderStatus();
+    if (team) ctx.ui.notify(t(M.notify.branchDisconnected, { team }), "info");
+  }
+}
+
+/**
+ * 会话替换时清掉会话级状态。
+ *
+ * new / resume / fork 会在同一个扩展运行时里再次触发 session_start。
+ * 不重置的话,上一个会话的连接、成员表、待回复、去重集合都会泄漏进
+ * 新会话 —— 那正是"切换会话后还连着上一个 team"这种故障的来源。
+ */
+function resetSessionScoped(): void {
+  transport?.stop();
+  transport = null;
+  connState = "offline";
+  currentMode = "broker";
+  currentTeam = null;
+  currentConfig = null;
+  currentJoinId = null;
+  state.members = [];
+  state.pendingReplies = [];
+  state.answering = [];
+  state.outbound = new Map();
+  state.seen = new Set();
+  state.injected = new Set();
+  state.self = "";
+  state.selfLabels = [];
+  state.reply = "remind";
+}
+
 // ---------------------------------------------------------------- 连接
 
 function connectWith(
@@ -390,22 +536,34 @@ function connectWith(
   /**
    * 会话级选项,来自这次调用的参数,覆盖启动时的值。
    *
-   * name 和 labels 不落盘:一台机器可以跑几个 Pi,每个是一个独立节点,
-   * 它们共用同一个 team 配置文件 —— 节点名存进去的话,第二个启动
-   * 就会把第一个覆盖掉,而名字就是身份。
+   * name 和 labels 不落进 team 配置:一台机器可以跑几个 Pi,每个是一个
+   * 独立节点,它们共用同一个 team 配置文件 —— 节点名存进去的话,第二个
+   * 启动就会把第一个覆盖掉,而名字就是身份。它们进的是会话内的成员关系
+   * 条目(见 membership.js)。
    */
   session: { name?: string; labels?: string[]; port?: number; listen?: string } = {},
-) {
+  /**
+   * 持久化选项。
+   *   persist:false  不要写 join 记录(仅还原时用)
+   *   joinId         沿用这个 join 身份(还原 / 已存在同一连接时用)
+   */
+  opts: { persist?: boolean; joinId?: string } = {},
+): boolean {
   transport?.stop();
+  // 先把引用清掉:创建失败时残留一个已 stop 的 transport 会让状态、重连
+  // 甚至下一次 stop 都作用在错误的对象上。
+  transport = null;
+  connState = "offline";
+  currentJoinId = null;
 
   currentTeam = team;
   currentConfig = config;
 
   // 优先级:本次调用的参数 > 启动时的值。
-  // 注意 labels 用 length 判断:空数组是 truthy,直接赋值会把
-  // 启动时的 --team-labels 覆盖成空。
+  // labels 用 Array.isArray 判断,而不是 length:还原时空标签是一个
+  // 有意义的值,不能被启动时的标签盖回去。
   if (session.name) state.self = session.name;
-  if (session.labels?.length) {
+  if (Array.isArray(session.labels)) {
     state.selfLabels = session.labels;
   } else if (!state.selfLabels?.length && config.labels?.length) {
     // 旧版本会把标签写进 team 配置。现在不写了,但已经存下的要继续
@@ -423,30 +581,34 @@ function connectWith(
   const resolved = resolveMode({ config, env: {} });
   if (!resolved.ok) {
     ctxRef?.ui.notify(`team:${resolved.reason}`, "error");
-    return;
+    return false;
   }
   currentMode = resolved.mode;
 
   const readiness = modeReadiness(resolved.mode, config);
   if (!readiness.ready) {
     ctxRef?.ui.notify(t(M.notify.modeUnavailable, { mode: resolved.mode, reason: readiness.reason }), "error");
-    return;
+    return false;
   }
+
+  // 监听选项:本次调用的选项 > 启动时的环境变量 > 默认。
+  // 解析出来的值就是"本次生效的监听选项",要写进成员关系记录,
+  // reload 之后才能用同样的地址重绑。
+  const listenHost = session.listen ?? process.env.TEAM_LISTEN_HOST ?? "0.0.0.0";
+  const listenPort = session.port ?? Number(process.env.TEAM_LISTEN_PORT ?? 0);
 
   const made = createTransport({
     mode: resolved.mode,
     config,
-    // 优先级:本次调用的选项 > 启动时的环境变量 > 默认。
-    // 监听端口不落盘(见 options.js),所以这是它唯一的来源。
-    listenHost: session.listen ?? process.env.TEAM_LISTEN_HOST ?? "0.0.0.0",
-    listenPort: session.port ?? Number(process.env.TEAM_LISTEN_PORT ?? 0),
+    listenHost,
+    listenPort,
     advertiseHost: process.env.TEAM_ADVERTISE_HOST ?? null,
     sidecarPath: process.env.PI_TEAM_SWIM_SIDECAR ?? null,
   });
 
   if (!made.ok) {
     ctxRef?.ui.notify(`team:${made.reason}`, "error");
-    return;
+    return false;
   }
 
   transport = made.transport;
@@ -496,7 +658,25 @@ function connectWith(
   });
 
   transport.start({ name: state.self, labels: state.selfLabels, host: safeHostname() });
+
+  // ── 持久化成员关系 ──
+  // 只有真正建立连接才写记录:创建失败的 join 不写成功记录。
+  // 还原(给了 joinId)不写:reload 不该造出新的 join 身份,
+  // 也不该让分支无限增长。
+  if (opts.joinId) {
+    currentJoinId = opts.joinId;
+  } else if (opts.persist !== false) {
+    const rec = makeJoinRecord({
+      team,
+      name: state.self,
+      labels: state.selfLabels,
+      listen: { host: listenHost, port: Number.isFinite(listenPort) ? listenPort : null },
+    });
+    if (appendMembership(rec)) currentJoinId = rec.id;
+  }
+
   renderStatus();
+  return true;
 }
 
 // ---------------------------------------------------------------- 导出
@@ -577,6 +757,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     ctxRef = ctx;
 
+    // new / resume / fork 会在同一个扩展运行时里再次触发 session_start。
+    // 先把上一个会话的连接与会话级状态清掉,避免泄漏进新会话。
+    resetSessionScoped();
+
     // 语言:flag > TEAM_LANG > team 配置 lang > shell。注册说明在扩展加载
     // 时就冻住了,这里重解析,让本次会话的运行时文案跟随 flag 与配置。
     const localeTeam = (pi.getFlag("team") as string) ?? process.env.TEAM ?? "";
@@ -619,6 +803,18 @@ export default function (pi: ExtensionAPI) {
     const modeFlag = (pi.getFlag("team-mode") as string) ?? process.env.TEAM_MODE ?? "";
     const seedsFlag = (pi.getFlag("team-seeds") as string) ?? process.env.TEAM_SEEDS ?? "";
 
+    // 当前分支上仍然生效的成员关系。
+    //
+    // 优先级:显式启动参数/环境变量 > 持久化记录。显式意图是“我这次就要
+    // 连这个”,保留它的优先权;只有没有显式意图时,才按记录自动还原。
+    const active = reduceMembership(safeGetBranch(ctx)) as
+      | { id: string; team: string | null; name?: string; labels?: string[]; listen?: { host?: string | null; port?: number | null } }
+      | null;
+
+    // 显式加入的是同一个 team 时,沿用已有 join 身份,不新造 —— 否则
+    // 每次带 --team 重启都会往分支上多堆一条 join。
+    const reuseJoinId = (t: string | null) => (active && active.team === t ? active.id : undefined);
+
     // ── TEAM_PUNCH:<uri> ──
     // 一台全新机器的一条命令加入路径:URI 里已经有 topic 和 token,
     // 所以不需要 seeds / url / TEAM_TOKEN。TEAM_TOKEN 仍可作为可选
@@ -643,7 +839,8 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       ctx.ui.notify(t(M.ui.notifyPunchJoined, { name: parsedPunch.name }), "info");
-      connectWith(parsedPunch.name, r.config);
+      const joinId = reuseJoinId(parsedPunch.name);
+      connectWith(parsedPunch.name, r.config, {}, joinId ? { joinId } : { persist: true });
       return;
     }
 
@@ -661,19 +858,32 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`team:${r.reason}`, "error");
         return;
       }
-      connectWith(team, r.config);
+      const joinId = reuseJoinId(team);
+      connectWith(team, r.config, {}, joinId ? { joinId } : { persist: true });
       return;
     }
 
     // 不读配置文件,完全由参数/环境变量驱动(适合容器和脚本)
     if (token && (url || seedsFlag || modeFlag)) {
-      connectWith(null, {
-        url: url || undefined,
-        token,
-        labels: state.selfLabels,
-        mode: modeFlag || undefined,
-        seeds: seedsFlag ? normalizeSeeds(seedsFlag) : undefined,
-      });
+      const joinId = reuseJoinId(null);
+      connectWith(
+        null,
+        {
+          url: url || undefined,
+          token,
+          labels: state.selfLabels,
+          mode: modeFlag || undefined,
+          seeds: seedsFlag ? normalizeSeeds(seedsFlag) : undefined,
+        },
+        {},
+        joinId ? { joinId } : { persist: true },
+      );
+      return;
+    }
+
+    // 没有显式启动意图:按当前分支上的记录自动还原。
+    if (active) {
+      restoreMembership(active);
       return;
     }
 
@@ -690,6 +900,13 @@ export default function (pi: ExtensionAPI) {
     transport?.stop();
     transport = null;
     ctxRef = null;
+  });
+
+  // 树导航后当前分支变了:重算成员关系,该重连就重连(保留身份),
+  // 回到加入之前的分支就断开。
+  pi.on("session_tree", async (_event, ctx) => {
+    ctxRef = ctx;
+    reconcileMembership(ctx);
   });
 
   pi.on("turn_start", async (_event, ctx) => {
