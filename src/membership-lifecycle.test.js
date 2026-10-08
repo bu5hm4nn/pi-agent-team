@@ -593,3 +593,85 @@ lifecycle("优先级:显式启动的是另一个 team 时,显式优先并记下�
     assert.notEqual(rt2.joins()[0].id, alphaId, "换 team 是一次新的 join");
   });
 });
+
+test("回归:树切到配置缺失的 join B 时,必须断掉旧 team A,不留残余连接", async (tc) => {
+  const home = withHome(tc);
+  const branch = [];
+
+  await withEnv(env({ HOME: home, TEAM_TOKEN: TOKEN }), async () => {
+    const rt = makeRuntime({ branch, flags: { team: "alpha", "team-url": URL_A } });
+    await rt.emit("session_start", { reason: "startup" });
+    assert.equal(rt.created.length, 1);
+    assert.equal(rt.transports[0].stopped, false);
+
+    // 分支上出现一个 team B 的 join,但 B 在本机没有配置
+    branch.push({ type: "custom", id: "b", parentId: null, timestamp: "", customType: MEMBERSHIP_TYPE, data: makeJoinRecord({ team: "beta", name: "b-node", labels: [], listen: { host: "0.0.0.0", port: 0 } }) });
+    await rt.emit("session_tree", { newLeafId: "b", oldLeafId: "e0" });
+
+    assert.equal(rt.transports[0].stopped, true, "旧 team A 的连接必须被停掉");
+    assert.equal(rt.created.length, 1, "B 配置缺失,不该新建任何连接");
+    assert.equal(rt.transports.length, 1);
+    assert.equal(rt.joins().length, 1, "树切换不该追加 join");
+    assert.equal(rt.leaves().length, 0, "树切换不该追加 leave");
+    assert.ok(
+      rt.notifications.some((n) => n.msg === t(M.config.teamUnknown, { team: "beta" })),
+      "应给出 B 缺配置的本地化提示",
+    );
+
+    // 状态必须是"未绑定 team + offline",不能还报着 A
+    await rt.command("status");
+    const unbound = t(M.dispatch.statusTeam, { team: t(M.dispatch.statusTeamUnbound) });
+    const offline = t(M.dispatch.statusConnState, { state: "offline" });
+    assert.ok(
+      rt.notifications.some((n) => n.msg.includes(unbound) && n.msg.includes(offline)),
+      `状态里不能残留旧 team A:${JSON.stringify(rt.notifications.map((n) => n.msg))}`,
+    );
+  });
+});
+
+test("回归:树切到 teamless(直连)记录时安全失败,断掉旧连接且不新建", async (tc) => {
+  const home = withHome(tc);
+  const branch = [];
+
+  await withEnv(env({ HOME: home, TEAM_TOKEN: TOKEN }), async () => {
+    const rt = makeRuntime({ branch, flags: { team: "alpha", "team-url": URL_A } });
+    await rt.emit("session_start", { reason: "startup" });
+    assert.equal(rt.transports[0].stopped, false);
+
+    branch.push({ type: "custom", id: "d", parentId: null, timestamp: "", customType: MEMBERSHIP_TYPE, data: makeJoinRecord({ team: null, name: "direct", labels: [], listen: { host: null, port: null } }) });
+    await rt.emit("session_tree", { newLeafId: "d", oldLeafId: "e0" });
+
+    assert.equal(rt.transports[0].stopped, true, "teamless 目标也必须先断掉旧连接");
+    assert.equal(rt.created.length, 1);
+    assert.equal(rt.transports.length, 1);
+    assert.ok(
+      rt.notifications.some((n) => n.msg === t(M.notify.restoreDirect)),
+      "teamless 无法还原时应给本地化提示",
+    );
+  });
+});
+
+test("回归:标签重连保留自定义监听端口,reload 后仍还原它", async (t) => {
+  const home = withHome(t);
+  const branch = [];
+
+  await withEnv(env({ HOME: home }), async () => {
+    const rt = makeRuntime({ branch });
+    // 自定义监听端口只经本次调用传入(不是环境变量),正是会被重连丢掉的那种
+    await rt.tool("team_join", { team: "alpha", url: URL_A, token: TOKEN, port: 19801, listen: "0.0.0.0" });
+    assert.equal(rt.joins().length, 1);
+    assert.deepEqual(rt.joins()[0].listen, { host: "0.0.0.0", port: 19801 });
+    assert.equal(rt.created[0].listenPort, 19801);
+
+    await rt.command("label add db");
+    assert.equal(rt.joins().length, 2, "标签变更仍会写一条新的 join");
+    assert.equal(rt.joins()[1].listen.port, 19801, "新的 join 记录必须保留自定义端口");
+    assert.equal(rt.created[1].listenPort, 19801, "重连必须用同一个监听端口");
+
+    await rt.emit("session_shutdown", { reason: "reload" });
+    const rt2 = makeRuntime({ branch });
+    await rt2.emit("session_start", { reason: "reload" });
+    assert.equal(rt2.created.length, 1);
+    assert.equal(rt2.created[0].listenPort, 19801, "reload 还原也要用记录里的端口");
+  });
+});

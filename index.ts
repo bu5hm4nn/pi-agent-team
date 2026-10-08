@@ -283,13 +283,7 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
       // 只关掉它真的加入过的那一次。
       const active = reduceMembership(safeGetBranch(ctx));
       const joinId = active?.id ?? currentJoinId;
-      const team = currentTeam;
-      transport?.stop();
-      transport = null;
-      connState = "offline";
-      currentTeam = null;
-      currentConfig = null;
-      currentJoinId = null;
+      const team = teardownConnection();
       if (joinId) appendMembership(makeLeaveRecord({ joinId, team }));
       renderStatus();
       return true;
@@ -297,8 +291,23 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
 
     case "reconnect": {
       const labels = party.labels as string[];
-      // 标签变了也是一次新的 join 记录(新的身份),还原时才会拿到新标签。
-      if (transport && currentConfig) connectWith(currentTeam, { ...currentConfig, labels }, {}, { persist: true });
+      // 标签变了也是一次新的 join 记录(新的身份),但监听选项属于这次
+      // 连接本身 —— 不能因为改标签就退回环境默认,否则用 --port 加入
+      // 的节点会悄悄换端口,新记录里也会丢掉它,reload 后还原到错误端口。
+      const active = reduceMembership(safeGetBranch(ctx));
+      const joined = active && active.id === currentJoinId ? active : null;
+      const listen = joined?.listen ?? null;
+      if (transport && currentConfig) {
+        connectWith(
+          currentTeam,
+          { ...currentConfig, labels },
+          {
+            listen: listen?.host ?? undefined,
+            port: typeof listen?.port === "number" ? listen.port : undefined,
+          },
+          { persist: true },
+        );
+      }
       return true;
     }
 
@@ -474,32 +483,51 @@ function restoreMembership(active: {
 }
 
 /**
+ * 断掉当前连接并清掉会话级的连接状态(成员表、待回复)。
+ *
+ * 成员表和待回复属于"当前连接":连接断了就必须一起清,否则它们会以
+ * "新连接还没来"的空窗期为名泄漏到下一条分支。返回被断掉的 team,
+ * 供调用方决定是否提示。
+ */
+function teardownConnection(): string | null {
+  const team = currentTeam;
+  transport?.stop();
+  transport = null;
+  connState = "offline";
+  currentTeam = null;
+  currentConfig = null;
+  currentJoinId = null;
+  state.members = [];
+  state.pendingReplies = [];
+  return team;
+}
+
+/**
  * session_tree 时的重算:当前分支上还有没有生效的 join。
  *
  *   - 有且和当前连接是同一个 join → 不动
- *   - 有但不同(或在别处)→ 按记录重连(保留身份,不追加)
+ *   - 有但不同(或在别处)→ 先断旧连接,再按记录重连(保留身份,不追加)
  *   - 没有而当前又连着 → 断开(分支已回到加入之前)
+ *
+ * 关键点:目标与当前连接不同时**先断**再试还原。不先断的话,目标配置
+ * 缺失(或 teamless)时 restoreMembership 会在 connectWith 之前返回,
+ * 旧 team 会一直连着一个不属于这条分支的房间。
  */
 function reconcileMembership(ctx: ExtensionContext): void {
   const active = reduceMembership(safeGetBranch(ctx));
 
+  // 已经连的就是这条分支上生效的那个 join → 保持原样。
+  if (active && currentJoinId === active.id && transport) return;
+
+  const wasTeam = teardownConnection();
+  renderStatus();
+
   if (active) {
-    if (currentJoinId === active.id && transport) return;
     restoreMembership(active);
     return;
   }
 
-  if (transport) {
-    const team = currentTeam;
-    transport.stop();
-    transport = null;
-    connState = "offline";
-    currentTeam = null;
-    currentConfig = null;
-    currentJoinId = null;
-    renderStatus();
-    if (team) ctx.ui.notify(t(M.notify.branchDisconnected, { team }), "info");
-  }
+  if (wasTeam) ctx.ui.notify(t(M.notify.branchDisconnected, { team: wasTeam }), "info");
 }
 
 /**

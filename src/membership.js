@@ -107,7 +107,9 @@ export function makeLeaveRecord({ joinId = "", team = null, at = null } = {}) {
     v: MEMBERSHIP_VERSION,
     kind: "leave",
     id: randomUUID(),
-    joinId: String(joinId),
+    // 不用 String(joinId):那会把 undefined/null 变成 "undefined"/"null",
+    // 看起来像合法引用。非字符串就落成空,让 isLeave 判为不合法,归约器直接跳过。
+    joinId: typeof joinId === "string" ? joinId : "",
     team: team ?? null,
     at: at ?? new Date().toISOString(),
   };

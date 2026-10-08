@@ -164,3 +164,12 @@ test("reduce:join 覆盖同分支上更早的 join(标签/模式变更后只保�
   assert.equal(out?.id, "ja2");
   assert.deepEqual(out?.labels, ["web", "db"]);
 });
+
+test("makeLeaveRecord:joinId 不是非空字符串时不产生看似合法的记录", () => {
+  for (const bad of [undefined, null, "", 42, {}]) {
+    const r = makeLeaveRecord({ joinId: bad });
+    assert.equal(isValidRecord(r), false, `joinId=${JSON.stringify(bad)} 的记录必须不合法`);
+  }
+  const ok = makeLeaveRecord({ joinId: "j1" });
+  assert.equal(isValidRecord(ok), true);
+});
