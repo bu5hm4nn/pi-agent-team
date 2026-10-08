@@ -42,6 +42,8 @@ const notify = Object.freeze({
   replyUnknown: "notify.replyUnknown",
   noTeamKnown: "notify.noTeamKnown",
   noTeam: "notify.noTeam",
+  restoreDirect: "notify.restoreDirect",
+  branchDisconnected: "notify.branchDisconnected",
   noPeersOnline: "notify.noPeersOnline",
   noTeamsConfigured: "notify.noTeamsConfigured",
   currentTeamMarker: "notify.currentTeamMarker",

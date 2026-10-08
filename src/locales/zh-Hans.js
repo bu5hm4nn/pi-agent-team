@@ -40,6 +40,8 @@ export const zhHans = Object.freeze({
   "notify.replyUnknown": "team:认不出的回信策略 \"{value}\",可以用:off / remind / mirror",
   "notify.noTeamKnown": "team:未指定 team。本机已有:{known}。用 --team <名字> 或 /team join",
   "notify.noTeam": "team:未加入任何 team。用 /team create 或 /team join",
+  "notify.restoreDirect": "team:本次会话是用显式参数/环境变量直连的(没有 team 名),无法自动恢复。请用同样的参数重新启动,或用 /team join。",
+  "notify.branchDisconnected": "team:当前分支在加入之前,已断开与 \"{team}\" 的连接。",
   "notify.noPeersOnline": "没有其他节点在线",
   "notify.noTeamsConfigured": "本机没有 team 配置",
   "notify.currentTeamMarker": "  ← 当前",

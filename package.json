@@ -48,6 +48,7 @@
     "src/locales/en-US.js",
     "src/locales/zh-Hans.js",
     "src/messages.js",
+    "src/membership.js",
     "src/mode.js",
     "src/options.js",
     "src/session.js",

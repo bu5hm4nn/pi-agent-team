@@ -43,6 +43,8 @@ export const enUS = Object.freeze({
   "notify.replyUnknown": "team: unrecognized reply strategy \"{value}\"; valid values: off / remind / mirror",
   "notify.noTeamKnown": "team: no team was specified. Teams on this machine: {known}. Use --team <name> or /team join",
   "notify.noTeam": "team: not in any team. Use /team create or /team join",
+  "notify.restoreDirect": "team: this session was connected with explicit flags/environment (no team name), so it cannot be restored automatically. Start again with the same options, or use /team join.",
+  "notify.branchDisconnected": "team: this branch is before the join, so the connection to \"{team}\" was closed.",
   "notify.noPeersOnline": "No other nodes online",
   "notify.noTeamsConfigured": "No teams configured on this machine",
   "notify.currentTeamMarker": "  ← current",
