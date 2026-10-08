@@ -195,6 +195,29 @@ already in use. Pass them on each run.
 
 `/team mode` switches mode without retyping `url` or `token`.
 
+## Language
+
+The extension's own output — menus, status lines, errors, help text — is shown
+in English or Chinese. English is the base and the default; Chinese is selected
+only when the locale is a positive `zh*` match.
+
+Detection order, first hit wins:
+
+```
+--team-lang  >  TEAM_LANG  >  team config `lang`  >  LC_ALL  >  LC_MESSAGES  >  LANG  >  Pi's host locale
+```
+
+`/team lang` reports the effective locale and where it came from; `/team lang
+zh-Hans` (or `en-US`) sets it. A value set this way is saved in the current
+team's config and its runtime messages apply immediately — the flag and command
+help is registered when the extension loads, so it applies the next time Pi
+starts. With no team bound it is session-only; use `--team-lang` or `TEAM_LANG`
+to keep it across sessions.
+
+The text sent to the model — tool descriptions, the system-prompt team section,
+and the injected teammate-message templates — is intentionally **not** localized
+yet; it stays Chinese while an upstream contribution is attempted.
+
 ## How it works
 
 [`docs/how-it-works.md`](docs/how-it-works.md) covers:

@@ -14,6 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BULK_WARN_THRESHOLD, dispatch, doSend, sendMessage } from "./dispatch.js";
 import { applyRoster, createSessionState } from "./session.js";
+import { setLocale } from "./i18n.js";
+
+// dispatch 的输出现在经由 t() 渲染。这些断言写的是中文目录的逐字文案,
+// 所以把 locale 钉在 zh-Hans —— 默认 locale 是 en-US,不钉就会拿到英文。
+setLocale("zh-Hans");
 
 const member = (name, over = {}) => ({
   name,
@@ -741,4 +746,36 @@ test("send:超长检查先于连接状态 —— 没连接时也报体积问题"
   const r = run("send", ["peer", "字".repeat(24000)], c);
   assert.equal(r.ok, false);
   assert.match(r.error, /太长|太大/, "体积问题是本地可判断的,不该被连接状态掩盖");
+});
+
+// ---------------------------------------------------------------- en-US 渲染
+
+/**
+ * 上面的断言都把 locale 钉在 zh-Hans,是对中文目录的逐字回归。
+ * 这一条把 locale 切到 en-US,走一遍代表性的分发路径,证明同一个
+ * dispatch 在英文默认下真的渲染英文(而不是漏键或只有局部翻译)。
+ */
+const CJK_RE = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/;
+
+test("en-US:分发输出的代表性路径渲染英文", () => {
+  setLocale("en-US");
+  try {
+    const statusCtx = setup({ team: "alpha" });
+    statusCtx.state.selfLabels = ["web"];
+    const status = run("status", [], statusCtx).lines.join("\n");
+    assert.match(status, /current team {2}alpha/);
+    assert.match(status, /online/);
+    assert.ok(!CJK_RE.test(status), `en-US 的 status 不应含中文:\n${status}`);
+
+    const peers = run("peers", [], setup({ peers: [member("a", { host: "dev01", labels: ["web"] })] })).lines.join("\n");
+    assert.match(peers, /available groups: @web/);
+    assert.ok(!CJK_RE.test(peers), `en-US 的 peers 不应含中文:\n${peers}`);
+
+    assert.match(run("nonsense", [], setup()).error, /Unknown subcommand/);
+    assert.match(run("send", ["peer", "hi"], setup({ connState: "offline" })).error, /not connected/);
+    assert.match(run("join", [], setup()).error, /Missing team name/);
+  } finally {
+    // 文件顶部把 locale 钉在 zh-Hans,恢复它,免得影响别的断言。
+    setLocale("zh-Hans");
+  }
 });
