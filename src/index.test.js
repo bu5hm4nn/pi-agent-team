@@ -249,9 +249,9 @@ test("tool:team_ask 返回的是投递回执,不会同步等答案", { skip: SKI
   const r = await tools.get("team_ask").execute("c3", { to: "peer", text: "需要答案" }, undefined, undefined, ctx);
   const text = r.content.map((c) => c.text).join("");
 
-  assert.equal(r.details.delivered, true, "回执表示已写入对方 socket");
+  assert.equal(r.details.delivered, true, "回执表示本地传输已接受");
   assert.match(text, /asked the recipient to reply/, "回执要说明已要求对方回信");
-  assert.match(text, /receipt only means the peer's socket received it/, "回执要明确不等于对方已处理");
+  assert.match(text, /receipt only means the local transport accepted it/, "回执要明确不等于对方已处理");
 });
 
 test("command:补全暴露 ask,send 不再补全 --require-response", { skip: SKIP }, async () => {
@@ -553,4 +553,86 @@ test("menu:request id 前缀不互相误配(精确匹配)", { skip: SKIP }, asyn
   // 清理剩下那条
   const { tools } = await build();
   await tools.get("team_reply").execute("mp-clean", { requestId: "m-prefix-1", text: "x" }, undefined, undefined, ctx);
+});
+
+function repairRoster(names) {
+  harness.transport.emit("membership", names.map(name => ({ name, host: null, addr: null, labels: [], since: 0 })));
+}
+function repairAsk(from, id) {
+  harness.transport.emit("envelope", { from, id, re: null, body: { text: "answer", hops: 0, requireResponse: true } });
+}
+
+test("repair: bulk confirmation freezes approved recipients and rechecks their obligations", { skip: SKIP }, async () => {
+  const { tools, ctx } = await build();
+  const names = Array.from({ length: 6 }, (_, i) => `freeze${i}`);
+  repairRoster(names);
+  harness.sent.length = 0;
+  const confirmCtx = fakeCtx({ confirm: async () => {
+    repairRoster([...names, "new-peer"]);
+    repairAsk("new-peer", "freeze-new");
+    return true;
+  } });
+  const result = await tools.get("team_send").execute("freeze", { to: "*", text: "hello" }, undefined, undefined, confirmCtx);
+  assert.equal(result.details.delivered, true);
+  assert.deepEqual(harness.sent[0].to, names);
+  await tools.get("team_reply").execute("clean", { requestId: "freeze-new", text: "done" }, undefined, undefined, ctx);
+  harness.sent.length = 0;
+  const blockedCtx = fakeCtx({ confirm: async () => { repairAsk(names[0], "freeze-old"); return true; } });
+  const blocked = await tools.get("team_ask").execute("blocked", { to: "*", text: "hello" }, undefined, undefined, blockedCtx);
+  assert.equal(blocked.details.delivered, false);
+  assert.equal(harness.sent.length, 0);
+  await tools.get("team_reply").execute("clean", { requestId: "freeze-old", text: "done" }, undefined, undefined, ctx);
+});
+
+test("repair: parallel registered replies consume an ID exactly once", { skip: SKIP }, async () => {
+  const { tools, ctx } = await build();
+  repairRoster(["race-peer"]);
+  repairAsk("race-peer", "race-id");
+  harness.attempts.length = 0;
+  const results = await Promise.all([1, 2].map(n => tools.get("team_reply").execute(`race${n}`, { requestId: "race-id", text: "done" }, undefined, undefined, ctx)));
+  assert.deepEqual(results.map(r => r.details.delivered), [true, false]);
+  assert.equal(harness.attempts.length, 1);
+});
+
+test("repair: overflow keeps every obligation blocked and individually replyable", { skip: SKIP }, async () => {
+  const { tools, ctx } = await build();
+  repairRoster(["overflowA", "overflowB"]);
+  repairAsk("overflowA", "overflowA-id");
+  for (let i = 0; i < 33; i++) repairAsk("overflowB", `overflowB-${i}`);
+  for (const tool of ["team_send", "team_ask"]) {
+    const result = await tools.get(tool).execute("blocked", { to: "overflowA", text: "new" }, undefined, undefined, ctx);
+    assert.equal(result.details.delivered, false);
+  }
+  for (const id of ["overflowA-id", ...Array.from({ length: 33 }, (_, i) => `overflowB-${i}`)]) {
+    const result = await tools.get("team_reply").execute("reply", { requestId: id, text: "done" }, undefined, undefined, ctx);
+    assert.equal(result.details.delivered, true, id);
+  }
+});
+
+test("repair: exact IDs do not alias and injected instructions safely encode IDs", { skip: SKIP }, async () => {
+  const { tools, ctx } = await build();
+  repairRoster(["exactA", "exactB"]);
+  repairAsk("exactA", "exact-r");
+  repairAsk("exactB", " exact-r");
+  harness.sent.length = 0;
+  const result = await tools.get("team_reply").execute("exact", { requestId: " exact-r", text: "B" }, undefined, undefined, ctx);
+  assert.equal(result.details.delivered, true);
+  assert.equal(harness.sent[0].to, "exactB");
+  assert.equal(harness.sent[0].re, " exact-r");
+  const stale = await tools.get("team_reply").execute("stale", { requestId: " exact-r", text: "again" }, undefined, undefined, ctx);
+  assert.equal(stale.details.delivered, false);
+  const blocked = await tools.get("team_send").execute("blocked", { to: "exactA", text: "new" }, undefined, undefined, ctx);
+  assert.equal(blocked.details.delivered, false);
+  await tools.get("team_reply").execute("clean", { requestId: "exact-r", text: "A" }, undefined, undefined, ctx);
+  const unusual = 'quote"\\\n-id';
+  repairAsk("exactB", unusual);
+  assert.ok(harness.messages.at(-1).content.includes(`requestId: ${JSON.stringify(unusual)}`));
+  repairAsk("exactB", "123");
+  for (const requestId of [null, undefined, 123, {}, ""]) {
+    const invalid = await tools.get("team_reply").execute("invalid", { requestId, text: "no" }, undefined, undefined, ctx);
+    assert.equal(invalid.details.delivered, false);
+  }
+  const numericId = await tools.get("team_reply").execute("clean", { requestId: "123", text: "done" }, undefined, undefined, ctx);
+  assert.equal(numericId.details.delivered, true);
+  await tools.get("team_reply").execute("clean", { requestId: unusual, text: "done" }, undefined, undefined, ctx);
 });

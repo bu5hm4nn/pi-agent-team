@@ -146,7 +146,7 @@ test("send:@分组解析", () => {
   const r = run("send", ["@web", "前端注意"], c);
 
   assert.equal(r.ok, true);
-  assert.deepEqual(r.intentions[0].to, "@web");
+  assert.deepEqual(r.intentions[0].to, ["a", "b"]);
   assert.match(r.lines.join(), /2 个节点/);
 });
 

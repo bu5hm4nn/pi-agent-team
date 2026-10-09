@@ -849,3 +849,22 @@ test("契约:所有 send 意图都不使用 body 字段(由调用方组装)", ()
     assert.equal("body" in a, false, "send 意图不该自带 body —— 那是 index.ts 的职责");
   }
 });
+
+test("overflow compacts reminder payloads without losing observation or once-only reminders", () => {
+  const s = createSessionState();
+  s.members = [{ name: "peer", labels: [] }];
+  s.self = "me";
+  const payloads = [];
+  for (let i = 0; i < 34; i++) {
+    const actions = handleIncoming(s, { from: "peer", id: `compact-${i}`, re: null, body: { text: "x".repeat(10000), hops: 0, requireResponse: true } });
+    payloads.push(actions.find(a => a.type === "inject").payload);
+  }
+  assert.equal(s.pendingReplies.length, 34);
+  assert.ok(s.pendingReplies.filter(p => p.ref).length <= 32);
+  for (const payload of payloads) observeMessage(s, "custom", payload, TEAM_MESSAGE_TYPE);
+  const reminders = onTurnSettled(s);
+  assert.equal(reminders.length, 34);
+  assert.equal(reminders[0].requestId, "compact-0");
+  assert.equal(onTurnSettled(s).length, 0);
+  assert.equal(s.pendingReplies.length, 34);
+});

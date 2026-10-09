@@ -33,7 +33,7 @@ import { createBrokerTransport, CLOSE_REPLACED } from "./src/transport.js";
 import { setLocale, getLocale, resolveLocale, resolveLocaleInfo, startupLocaleEnv, classifyLocale, SUPPORTED_LOCALES, t } from "./src/i18n.js";
 import { M } from "./src/messages.js";
 import { MODES, createTransport, modeReadiness, normalizeSeeds, resolveMode } from "./src/mode.js";
-import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, transmitBodyFrom, teamSize, applyRoster, consumeRequest, TEAM_MESSAGE_TYPE } from "./src/session.js";
+import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, transmitBodyFrom, teamSize, applyRoster, bindRequest, consumeRequest, TEAM_MESSAGE_TYPE } from "./src/session.js";
 import { normalizeReplyMode } from "./src/dispatch.js";
 import { createTeam, joinTeam, leaveTeam, listTeams, readTeam, toSocketUrl, writeTeam } from "./src/team-config.js";
 import { dispatch, doTransmit } from "./src/dispatch.js";
@@ -198,6 +198,16 @@ async function runIntentions(
         //
         // transport.send 返回 false 或抛异常都算写入失败:记成 failure,
         // 通知本机,并**不**消费任何待回复(下面只在成功分支消费)。
+        // 校验、同步写入、消费之间不能 await:并发执行只能有一个成功。
+        if (it.replyRequestId) {
+          const requestId = String(it.replyRequestId);
+          const bound = bindRequest(state, requestId);
+          if (!bound || bound.replyTo !== it.to || bound.re !== it.re) {
+            const error = t(M.dispatch.explicitReplyUnknown, { id: requestId });
+            failures.push({ to: it.to as string | string[], requestId, error });
+            return { notes, failures };
+          }
+        }
         let okSent = false;
         let threw: string | null = null;
         try {
@@ -261,7 +271,7 @@ async function runIntentions(
         const payload = String(it.ref ?? "");
         const requestId = String(it.requestId ?? "");
         const how = requestId
-          ? `现在就回复它:team_reply({ requestId: "${requestId}", text: "..." })。`
+          ? `现在就回复它:team_reply({ requestId: ${JSON.stringify(requestId)}, text: "..." })。`
           : `现在就回复它:team_reply({ requestId: "<注入消息里的 id>", text: "..." })。`;
         try {
           apiRef?.sendMessage(
