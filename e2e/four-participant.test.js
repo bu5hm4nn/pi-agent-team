@@ -43,11 +43,54 @@ function controller() {
 
 async function reap(child) {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
-  const exit = once(child, "exit");
-  child.kill("SIGTERM");
-  const timer = setTimeout(() => child.kill("SIGKILL"), 1000);
-  try { await exit; } finally { clearTimeout(timer); }
+  await new Promise((resolve, reject) => {
+    const diagnostics = [];
+    let escalation;
+    let deadline;
+    function finish(error) {
+      clearTimeout(escalation);
+      clearTimeout(deadline);
+      child.off("exit", onExit);
+      child.off("error", onError);
+      error ? reject(error) : resolve();
+    }
+    function onExit() { finish(); }
+    function onError(error) { diagnostics.push(`error=${error.message}`); }
+    function kill(signal) {
+      try { diagnostics.push(`${signal}=${child.kill(signal)}`); }
+      catch (error) { diagnostics.push(`${signal}=${error.message}`); }
+    }
+    child.on("exit", onExit);
+    child.on("error", onError);
+    // 两段期限均先登记；kill 返回 false 或抛错也不能跳过最终清理。
+    escalation = setTimeout(() => {
+      deadline = setTimeout(() => finish(new Error(`Reap timeout pid=${child.pid}; ${diagnostics.join("; ")}`)), 1000);
+      kill("SIGKILL");
+    }, 1000);
+    kill("SIGTERM");
+  });
 }
+
+// 用无真实进程的故障替身证明：杀进程失败且永无 exit 时仍有最终期限。
+test("清理：SIGKILL 后无 exit 也有界失败并移除监听器", { skip: !runnable, timeout: 1000 }, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const child = Object.assign(new EventEmitter(), { pid: 12345, exitCode: null, signalCode: null });
+  const signals = [];
+  child.kill = signal => {
+    signals.push(signal);
+    if (signal === "SIGKILL") throw new Error("simulated kill failure");
+    return false;
+  };
+  const rejected = assert.rejects(reap(child), /pid=12345.*SIGTERM=false.*SIGKILL=simulated kill failure/);
+  t.mock.timers.tick(1000);
+  t.mock.timers.tick(1000);
+  await rejected;
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  assert.equal(child.listenerCount("exit"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+  t.mock.timers.tick(10000);
+  assert.equal(signals.length, 2);
+});
 
 async function harness(t) {
   const home = await mkdtemp(join(tmpdir(), "pi-four-"));
@@ -58,8 +101,11 @@ async function harness(t) {
   t.after(async () => {
     closing = true;
     control.fail(new Error("Harness cleanup"));
-    try { await Promise.all(children.map(reap)); }
-    finally { await rm(home, { recursive: true, force: true }); }
+    try {
+      const results = await Promise.allSettled(children.map(reap));
+      const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
+      if (errors.length) throw new AggregateError(errors, "Failed to reap test children");
+    } finally { await rm(home, { recursive: true, force: true }); }
   });
   const server = createServer();
   let port;
@@ -230,6 +276,10 @@ test("四节点真实工具：并发请求溢出、精确回复、阻断、一�
       assert.equal(matching[0].options.triggerTurn, true);
     }
   }
+  const independentReplies = application(A).filter(e => e.re === independent[1].id);
+  assert.equal(independentReplies.length, 1, "A receives exactly one reply to its independent ask");
+  assert.equal(independentReplies[0].from, "C");
+  assert.equal(independentReplies[0].body.text, "independent-answer");
   for (const q of questions) {
     const replies = application(h.nodes.find(n => n.name === q.from)).filter(e => e.re === q.id);
     assert.equal(replies.length, 1, `exactly one reply for ${q.id}`);
