@@ -26,7 +26,12 @@ No public relay, no phone app, no account.
   so a run that was doing something else cannot have its tail sent to the wrong
   peer as a "reply".
 - **The conversation ends.** A request is answered; a reply is not. Two agents
-  cannot talk in circles.
+  cannot talk in circles. Messages do not ask for a reply unless you
+  explicitly ask for one.
+- **Choosing whether a reply is wanted.** `team_send` delivers and wakes the
+  peer by default, but does not ask it to answer. Set `requireResponse: true`
+  (or `/team send --require-response`) only when you actually need an answer;
+  the peer is then reminded once if it stays silent.
 - **You can see it.** `📥 RECV` / `📤 SEND` / `🔁 REPLY` / `⚠️ FAIL` cards in the
   transcript. Display only — they never enter the model's context.
 - **Two entry points.** `/team` commands for you, `team_*` tools for the model.
@@ -127,6 +132,7 @@ prints the right one.
 /team                     # interactive menu
 /team peers               # who is online
 /team send other hello
+/team send --require-response srv-api run the migration and report back
 /team send "@web" deploy is starting
 /team send '*' maintenance in 5 minutes
 ```
@@ -183,6 +189,25 @@ runtime. The older names still work: `TEAM_ANNOUNCE`, `--team-announce`,
 `/team announce`, and the values `auto` (now `remind`) and `always` (now
 `mirror`). Using one prints a note saying what it is called now — `auto` and
 `always` no longer describe what the mode does, which is why they were renamed.
+
+### Asking for a reply (per message)
+
+`reply` decides what this node does about *incoming* requests. Whether a
+*specific* message asks for a reply is a property of that message:
+
+| How | Effect |
+|---|---|
+| `team_send({ to, text })` — or `/team send other hi` | Delivered and the peer is woken, but no reply is requested; no reminder is created. **This is the default.** |
+| `team_send({ to, text, requireResponse: true })` — or `/team send --require-response other hi` | The peer is asked to answer and is reminded once if it does not. |
+
+The flag lives on the message, not in the config, and `--require-response` must
+come **before** the recipient so a message body that happens to contain the
+same text is never eaten. A reply never asks for a reply, even if the flag is
+set: it is bound to the message it answers, so conversations still end. On the
+receiving side the flag is ignored entirely when `reply=off`.
+
+The receiving agent is always woken either way — `requireResponse` controls
+whether an answer is *expected*, not whether the message is delivered.
 
 The last four are not saved because one machine can run several Pi agents and
 they share one config file. Saving the name would have the second agent

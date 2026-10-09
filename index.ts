@@ -33,7 +33,7 @@ import { createBrokerTransport, CLOSE_REPLACED } from "./src/transport.js";
 import { setLocale, getLocale, resolveLocale, resolveLocaleInfo, startupLocaleEnv, classifyLocale, SUPPORTED_LOCALES, t } from "./src/i18n.js";
 import { M } from "./src/messages.js";
 import { MODES, createTransport, modeReadiness, normalizeSeeds, resolveMode } from "./src/mode.js";
-import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, teamSize, applyRoster, TEAM_MESSAGE_TYPE } from "./src/session.js";
+import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, sendBodyFrom, teamSize, applyRoster, TEAM_MESSAGE_TYPE } from "./src/session.js";
 import { normalizeReplyMode } from "./src/dispatch.js";
 import { createTeam, joinTeam, leaveTeam, listTeams, readTeam, toSocketUrl, writeTeam } from "./src/team-config.js";
 import { BULK_WARN_THRESHOLD, dispatch, doSend, sendMessage } from "./src/dispatch.js";
@@ -187,11 +187,9 @@ async function runIntentions(
           to: it.to as string | string[],
           id: String(it.id),
           re: (it.re as string | null) ?? null,
-          body: {
-            text: String(it.text ?? ""),
-            hops: typeof it.hops === "number" ? it.hops : 1,
-            ...(it.fyi ? { fyi: true } : {}),
-          },
+          // body 的组装集中在 session.sendBodyFrom:requireResponse 只把
+          // true 写进去,缺省与 false 都不写(接收方按缺省即 false 处理)。
+          body: sendBodyFrom(it),
         });
         if (!okSent) {
           const msg = t(M.notify.sendFailed);
@@ -294,7 +292,9 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
       // 确认后走同一条发送路径,不复制逻辑
       const to = party.to as string | string[];
       const local = { targets: new Array(n).fill("") as string[], unknown: [] };
-      const r = doSend(to, String(party.text), (party.origin as "user" | "model") ?? "user", local, state, envOf());
+      const r = doSend(to, String(party.text), (party.origin as "user" | "model") ?? "user", local, state, envOf(), {
+        requireResponse: party.requireResponse === true,
+      });
       if (!r.ok) {
         ctx.ui.notify(r.error!, "error");
         return false;
@@ -308,7 +308,7 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
 
 /** dispatch + 执行。命令和工具的统一入口。 */
 async function invoke(
-  input: { sub: string; args: string[]; origin?: "user" | "model" },
+  input: { sub: string; args: string[]; origin?: "user" | "model"; requireResponse?: boolean },
   ctx: ExtensionContext,
 ) {
   ctxRef = ctx;
@@ -416,6 +416,7 @@ function connectWith(
   state.members = [];
   state.pendingReplies = [];
   state.answering = [];
+  state.incomingIds = new Map();
 
   // 模式只看配置。启动时的 TEAM_MODE 已经在下面并进去了 ——
   // 这里再读环境变量的话,/team mode 切换就会被它压住,切不动。
@@ -720,6 +721,7 @@ export default function (pi: ExtensionAPI) {
       labels.length ? `可用分组:${labels.map((l) => `@${l}`).join(" ")}` : "",
       "",
       "**发送**:调用 `team_send({ to, text })`。`to` 可以是节点名、`@label`(分组)、`\"*\"`(全员)、`\"@default\"`(默认组),或数组。",
+      "**默认不要求回信**:队友消息默认只是送达并唤醒你,不要求回复;只有发送方明确要求回信(team_send 的 requireResponse: true)时才会提醒你一次。",
       "**查成员**:调用 `team_roster()`,或 `team_info({ what: \"peers\" })`。",
       "",
       "**接收**:输入里出现 `[来自 <名字> 的 team 消息]` 前缀时,那是另一个 agent 发来的请求,不是真人打字。",
@@ -742,9 +744,10 @@ export default function (pi: ExtensionAPI) {
     label: "Team Send",
     description:
       "给同一 team 里的其他 Pi 节点发消息,也用它回复收到的队友消息。to 可以是节点名、'@label' 分组、'*' 全员、'@default' 默认组,或逗号分隔的名字数组。名字从 team_roster 或系统提示的 Team 段落获取。",
-    promptSnippet: "team_send(to, text) — 给一个或一组 Pi 节点发消息(也是回复队友的方式)",
+    promptSnippet: "team_send(to, text, requireResponse?) — 给一个或一组 Pi 节点发消息(也是回复队友的方式)",
     promptGuidelines: [
       "Use team_send only when the task spans another machine; each recipient costs a full model turn.",
+      "Messages are informational by default: they wake the peer but do NOT require a reply. Set requireResponse: true only when you actually need an answer and want the peer reminded.",
       "Replies are NOT automatic: when a teammate's message needs an answer, call team_send to answer it. Sending back to the same peer links it to their request automatically.",
       "You can ignore a teammate's message when no answer is needed; it will be reminded once, not repeatedly.",
       "Broadcasting with '*' or '@label' wakes every matching node; prefer naming recipients.",
@@ -752,14 +755,23 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       to: Type.String({ description: "节点名、'@label'、'*'、'@default',或逗号分隔多收件人" }),
       text: Type.String({ description: "消息内容:背景、期望产出、验收标准一次说清" }),
+      requireResponse: Type.Optional(
+        Type.Boolean({
+          default: false,
+          description:
+            "是否需要对方回信。默认 false:消息仍会送达并唤醒对方,但不要求回复、不产生提醒。设为 true 才要求对方回复;对方未回复会被提醒一次。",
+        }),
+      ),
     }),
 
     renderCall(args, theme) {
       const raw = String(args?.to ?? "?");
       const bulk = raw === "*" || raw === "@default" || raw.includes(",") || raw.startsWith("@") || raw.startsWith("#");
+      const need = args?.requireResponse === true ? theme.fg("warning", ` (${t(M.tool.requireResponse)})`) : "";
       const head =
         theme.fg("toolTitle", theme.bold("team_send ")) +
-        theme.fg(bulk ? "warning" : "accent", bulk ? `📢 ${raw}` : `📤 ${raw}`);
+        theme.fg(bulk ? "warning" : "accent", bulk ? `📢 ${raw}` : `📤 ${raw}`) +
+        need;
       const lines = String(args?.text ?? "").split("\n");
       let text = head + "\n" + lines.slice(0, 4).map((l) => theme.fg("muted", `  ${l}`)).join("\n");
       if (lines.length > 4) text += "\n" + theme.fg("dim", `  ${t(M.tool.moreLines, { count: lines.length - 4 })}`);
@@ -779,7 +791,7 @@ export default function (pi: ExtensionAPI) {
       // origin:"model" —— 对方回复时靠它判断"模型知道这回事吗"。
       // 以前这里没传,dispatch 一律记成 "user",于是模型发出的消息被
       // 记成人发的,对方回复时只显示一张卡片,模型永远看不到那条回复。
-      const r = await invoke({ sub: "send", args: [params.to, params.text], origin: "model" }, ctx);
+      const r = await invoke({ sub: "send", args: [params.to, params.text], origin: "model", requireResponse: params.requireResponse === true }, ctx);
 
       if (!r.ok) {
         return {
@@ -1035,6 +1047,11 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (sub === "send" && rest.length <= 1) {
+        if (partial.startsWith("--")) {
+          return [{ value: "--require-response", label: "--require-response", description: t(M.ui.acRequireResponse) }].filter(
+            (i) => i.value.startsWith(partial),
+          );
+        }
         const items = [
           { value: "@default", label: "@default", description: t(M.ui.acDefaultGroup) },
           { value: "*", label: "*", description: t(M.ui.acAll) },

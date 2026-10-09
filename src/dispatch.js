@@ -524,15 +524,25 @@ function labelResult(args, state, env) {
 // ---------------------------------------------------------------- send
 
 function sendResult(args, state, env, input = {}) {
-  const rawTo = args[0];
-  const text = args.slice(1).join(" ");
+  // 命令行的 --require-response 是一个**前缀**开关:它必须在收件人之前,
+  // 这样正文里出现同样的字样不会被误吞(/team send peer --require-response
+  // 的正文就是 "--require-response")。工具路径通过 input.requireResponse 传布尔。
+  const rest = Array.isArray(args) ? [...args] : [];
+  let requireResponse = input.requireResponse === true;
+  while (rest[0] === "--require-response") {
+    requireResponse = true;
+    rest.shift();
+  }
+
+  const rawTo = rest[0];
+  const text = rest.slice(1).join(" ");
   if (!rawTo || !text) return bad(t(M.dispatch.sendUsage));
 
   // origin 以前写死成 "user",连 team_send 工具也是 —— 于是模型发出的消息
   // 被记成人发的,对方回复时只显示卡片,模型永远看不到那条回复。
   // 工具路径在 index.ts 里传 origin:"model"。
   const origin = input.origin === "model" ? "model" : "user";
-  return sendMessage(rawTo, text, origin, state, env);
+  return sendMessage(rawTo, text, origin, state, env, { requireResponse });
 }
 
 /**
@@ -540,8 +550,12 @@ function sendResult(args, state, env, input = {}) {
  *
  * 群发超过阈值时不直接发,返回 confirmBulk 让上层决定怎么问:
  * 命令走 confirm 对话框,工具走结构化返回让模型自己判断。
+ *
+ * requireResponse 必须跟着 party 一起返回,否则用户确认后那一步会丢标
+ * 志 —— 确认后的 doSend 拿不到它,要求回信就静默消失了。
  */
-export function sendMessage(rawTo, text, origin, state, env) {
+export function sendMessage(rawTo, text, origin, state, env, opts = {}) {
+  const requireResponse = opts.requireResponse === true;
   const to = parseRecipients(rawTo);
   const local = resolveLocal(state, to);
 
@@ -564,12 +578,12 @@ export function sendMessage(rawTo, text, origin, state, env) {
         }),
       ],
       {
-        party: { kind: "confirmBulk", n: local.targets.length, to, text, origin },
+        party: { kind: "confirmBulk", n: local.targets.length, to, text, origin, requireResponse },
       },
     );
   }
 
-  return doSend(to, text, origin, local, state, env);
+  return doSend(to, text, origin, local, state, env, { requireResponse });
 }
 
 /**
@@ -598,7 +612,7 @@ export function oversizeBy(text) {
   return total > frameLimit ? { bytes, limit: frameLimit, total } : null;
 }
 
-export function doSend(to, text, origin, local, state, env) {
+export function doSend(to, text, origin, local, state, env, opts = {}) {
   // 先查体积再查连接:超长是本地就能判断的问题,不该依赖连接状态
   const over = oversizeBy(text);
   if (over) {
@@ -619,12 +633,19 @@ export function doSend(to, text, origin, local, state, env) {
   // 发给一个正有待回复请求的队友 → 认成对那条请求的回复。
   // 带上 re,对端才知道这是回复、不该再自动回信;不带的话两个 agent
   // 会互相触发下去,只能靠跳数上限兜住。
-  const { replyTo, re, hops } = bindReply(state, local.targets);
+  // 显式要求回信的消息不会被"可选关联"吞掉:它是一条新请求,只走待回复通道。
+  const wantsReply = opts.requireResponse === true;
+  const { replyTo, re, hops } = bindReply(state, local.targets, { allowAssociation: !wantsReply });
+
+  // 回复永远不要求回信:它带着 re,对端会按"回复"处理。把标志归零,
+  // 让信封本身就说真话,不依赖对端的优先级判断来兜底。
+  const requireResponse = replyTo ? false : wantsReply;
 
   const lines = [
     t(M.dispatch.sendSent, { to: formatTarget(to), count: local.targets.length }),
   ];
   if (replyTo) lines.push(t(M.dispatch.sendAsReply, { id: replyTo }));
+  if (requireResponse) lines.push(t(M.dispatch.sendAwaitReply));
 
   return ok(lines, {
     intentions: [
@@ -632,7 +653,7 @@ export function doSend(to, text, origin, local, state, env) {
       // 由 index.ts 组装成信封的 body。
       // 曾经一边写 body:{text} 一边读 it.text,导致 /team send 发出
       // 空正文的消息 —— 对方只看到空字符串,症状是"投递成功但对方没反应"。
-      { type: "send", to, id, re, text, hops },
+      { type: "send", to, id, re, text, hops, requireResponse },
       { type: "card", kind: replyTo ? "reply" : "send", peer: formatTarget(to), text },
     ],
   });

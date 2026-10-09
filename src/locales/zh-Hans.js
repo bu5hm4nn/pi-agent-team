@@ -52,6 +52,7 @@ export const zhHans = Object.freeze({
   "tool.moreLines_other": "…还有 {count} 行",
   "tool.cardMoreLines_one": "…还有 {count} 行(展开查看)",
   "tool.cardMoreLines_other": "…还有 {count} 行(展开查看)",
+  "tool.requireResponse": "(要求回信)",
   "tool.notConnected": "未连接,消息没发出去",
   "tool.delivered": "✓ 已投递给 {to}",
   "tool.noPeers": "(无其他节点)",
@@ -144,7 +145,7 @@ export const zhHans = Object.freeze({
   "dispatch.label.reconnect": "(标签变了,正在重连 broker)",
   "dispatch.label.usage": "用法:/team label [list|add <名字...>|remove <名字...>]",
 
-  "dispatch.send.usage": "用法:/team send <名字|@分组|*|@default|a,b> <内容>",
+  "dispatch.send.usage": "用法:/team send [--require-response] <名字|@分组|*|@default|a,b> <内容>",
   "dispatch.send.noMatch": "没有匹配的收件人({targets})",
   "dispatch.send.noPeers": "没有其他节点在线",
   "dispatch.send.bulk_one": "准备群发给 {count} 个节点:{targets}",
@@ -154,6 +155,7 @@ export const zhHans = Object.freeze({
   "dispatch.send.sent_one": "已发给 {to}({count} 个节点)",
   "dispatch.send.sent_other": "已发给 {to}({count} 个节点)",
   "dispatch.send.asReply": "(作为对 {id} 那条请求的回复)",
+  "dispatch.send.awaitReply": "(已要求对方回信)",
 
   "dispatch.target.all": "全员",
   "dispatch.target.default": "默认组",
@@ -315,6 +317,7 @@ export const zhHans = Object.freeze({
   "ui.acAll": "全员",
   "ui.acGroup": "分组",
   "ui.acKnownConfig": "本机已有配置",
+  "ui.acRequireResponse": "要求对方回信(默认关闭)",
   "ui.acNodeName": "本节点名(仅本次运行)",
   "ui.acLabels": "标签,逗号分隔",
 
