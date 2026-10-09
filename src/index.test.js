@@ -33,7 +33,7 @@ const TRANSPORT_SUFFIX = "/src/transport.js";
 const TYPEBOX_SUFFIX = "/typebox/index.js";
 
 /** fake transport 把每次投递记在这里,测试直接读。 */
-globalThis.__piTeamHarness = { sent: [] };
+globalThis.__piTeamHarness = { sent: [], messages: [] };
 const harness = globalThis.__piTeamHarness;
 
 const FAKE_TYPEBOX = `
@@ -125,7 +125,9 @@ function fakePi() {
     registerCommand(name, def) {
       commands.set(name, def);
     },
-    sendMessage() {},
+    sendMessage(msg) {
+      globalThis.__piTeamHarness.messages.push(msg);
+    },
     appendEntry() {},
   };
   return { pi, tools, commands, handlers };
@@ -282,24 +284,123 @@ test("menu:发消息的向导也能选 ask,并真的走 ask", { skip: SKIP }, as
   assert.equal(harness.sent[0].body.text, "菜单发的询问");
 });
 
-test("tool:对端有待回复时 team_ask 仍发新请求,不消费它 —— 之后 team_send 仍能回复原请求", { skip: SKIP }, async () => {
+test("tool:team_reply 注册,公开 schema 要求 requestId + text(没有 to)", { skip: SKIP }, async () => {
+  const { tools } = await build();
+  assert.ok(tools.has("team_reply"), "team_reply 应注册");
+  const keys = Object.keys(tools.get("team_reply").parameters.properties);
+  assert.deepEqual(keys.sort(), ["requestId", "text"], "team_reply 只要 requestId / text");
+  assert.equal("to" in tools.get("team_reply").parameters.properties, false, "不能靠 to 猜回复对象");
+});
+
+test("tool:team_reply 缺 requestId / 未知 id 时失败,不发信封", { skip: SKIP }, async () => {
+  const { tools, ctx } = await build();
+  harness.sent.length = 0;
+
+  const missing = await tools.get("team_reply").execute("r0", { requestId: "", text: "x" }, undefined, undefined, ctx);
+  assert.equal(missing.details.delivered, false);
+
+  const unknown = await tools.get("team_reply").execute("r1", { requestId: "nope", text: "x" }, undefined, undefined, ctx);
+  assert.equal(unknown.details.delivered, false);
+  assert.match(unknown.content.map((c) => c.text).join(""), /nope/);
+  assert.equal(harness.sent.length, 0, "失败不能发出任何信封");
+});
+
+test("tool:收到 team_ask → 注入文本带 request id 与 team_reply 指令", { skip: SKIP }, async () => {
+  const { ctx } = await build();
+  const tr = harness.transport;
+  harness.messages.length = 0;
+
+  tr.emit("envelope", { from: "peer", id: "req-in-1", re: null, body: { text: "请回复", hops: 0, requireResponse: true } });
+  const payload = String(harness.messages.at(-1)?.content ?? "");
+  assert.match(payload, /req-in-1/, "注入文本必须给出 request id");
+  assert.match(payload, /team_reply\(\{ requestId: "req-in-1"/, "并给出精确的回复指令");
+  assert.doesNotMatch(payload, /team_send\(\{ to:/, "不再保留旧的 team_send 回复脚手架");
+
+  // 清理:直接把它回掉,不影响后续测试
+  const { tools } = await build();
+  await tools.get("team_reply").execute("cleanup", { requestId: "req-in-1", text: "done" }, undefined, undefined, ctx);
+});
+
+test("menu:有待回复的请求时菜单出现 team_reply 入口", { skip: SKIP }, async () => {
+  const { commands, ctx } = await build();
+  const tr = harness.transport;
+  harness.sent.length = 0;
+
+  tr.emit("envelope", { from: "peer", id: "req-menu", re: null, body: { text: "请回复", hops: 0, requireResponse: true } });
+
+  let sawMenu = false;
+  const menuCtx = fakeCtx({
+    select: async (title, options) => {
+      if (title === "Pi Agent Team") {
+        sawMenu = true;
+        const reply = options.find((o) => /pending request/i.test(o));
+        assert.ok(reply, `菜单应包含待回复入口:${options.join(" | ")}`);
+        return reply;
+      }
+      if (title === t(M.ui.selectReplyPending)) return "req-menu";
+      return undefined;
+    },
+    input: async () => "菜单回的",
+  });
+  await commands.get("team").handler("", menuCtx);
+  assert.ok(sawMenu, "应打开菜单");
+  assert.equal(harness.sent.length, 1, "菜单回复应投递一次");
+  assert.equal(harness.sent[0].re, "req-menu", "回复要带原 request id");
+});
+
+test("command:/team reply 补全待回复的 request id;/team replies 补全策略", { skip: SKIP }, async () => {
+  const { commands, ctx } = await build();
+  const tr = harness.transport;
+  tr.emit("envelope", { from: "peer", id: "req-ac", re: null, body: { text: "请回复", hops: 0, requireResponse: true } });
+
+  const cmd = commands.get("team");
+  const ids = cmd.getArgumentCompletions("reply req");
+  assert.ok(ids.some((i) => i.value === "req-ac"), `reply 要补全 request id:${ids.map((i) => i.value)}`);
+
+  const modes = cmd.getArgumentCompletions("replies m");
+  assert.ok(modes.some((i) => i.value === "mirror"), `replies 要补全模式:${modes.map((i) => i.value)}`);
+
+  // 清理
+  await build().then(({ tools }) => tools.get("team_reply").execute("c", { requestId: "req-ac", text: "x" }, undefined, undefined, ctx));
+});
+
+test("tool:对待回复的队友 send/ask 被阻断,无关节点可用,team_reply 可以回答", { skip: SKIP }, async () => {
   const { tools, ctx } = await build();
   const tr = harness.transport;
-  assert.ok(tr && typeof tr.emit === "function", "前置:假 transport 已挂上,能注入入站消息");
+  assert.ok(tr && typeof tr.emit === "function", "前置:假 transport 已挂上");
+
+  // 加一个无关节点 other
+  tr.emit("membership", [
+    { name: "me", host: null, addr: null, labels: [], since: 0 },
+    { name: "peer", host: "dev01", addr: null, labels: ["web"], since: 0 },
+    { name: "other", host: "dev02", addr: null, labels: [], since: 0 },
+  ]);
 
   harness.sent.length = 0;
   // 对端发来一条要求回信的消息 → 本机建立对 peer 的待回复。
   tr.emit("envelope", { from: "peer", id: "peer-req-ask", re: null, body: { text: "请回复", hops: 0, requireResponse: true } });
 
-  const askRes = await tools.get("team_ask").execute("k1", { to: "peer", text: "我的新请求" }, undefined, undefined, ctx);
-  assert.equal(askRes.details.delivered, true);
-  assert.equal(harness.sent[0].body.requireResponse, true, "team_ask 要求回信");
-  assert.equal(harness.sent[0].re, null, "team_ask 是新请求,不能带上对方请求的 id");
-  assert.equal(harness.sent[0].body.hops, 0, "team_ask 跳数从 0 开始");
+  const sendRes = await tools.get("team_send").execute("k1", { to: "peer", text: "新消息" }, undefined, undefined, ctx);
+  assert.equal(sendRes.details.delivered, false, "有待回复时 send 被阻断");
+  assert.match(sendRes.content.map((c) => c.text).join(""), /peer-req-ask/);
 
-  // 待回复没有被 ask 消费,所以随后的 team_send 仍能关联到它。
-  const sendRes = await tools.get("team_send").execute("k2", { to: "peer", text: "回复原请求" }, undefined, undefined, ctx);
-  assert.equal(sendRes.details.delivered, true);
-  assert.equal("requireResponse" in harness.sent[1].body, false, "回复(send)不要求回信");
-  assert.equal(harness.sent[1].re, "peer-req-ask", "原待回复未被 ask 消费,team_send 仍能关联");
+  const askRes = await tools.get("team_ask").execute("k2", { to: "peer", text: "新问题" }, undefined, undefined, ctx);
+  assert.equal(askRes.details.delivered, false, "有待回复时 ask 也被阻断");
+
+  const otherRes = await tools.get("team_send").execute("k3", { to: "other", text: "给别人的" }, undefined, undefined, ctx);
+  assert.equal(otherRes.details.delivered, true, "无关节点不受影响");
+  assert.equal(harness.sent.length, 1, "只有发给 other 的那条发出去了");
+  assert.equal(harness.sent[0].to, "other");
+
+  // 显式回复唯一能解除阻断。
+  const replyRes = await tools.get("team_reply").execute("k4", { requestId: "peer-req-ask", text: "回复原请求" }, undefined, undefined, ctx);
+  assert.equal(replyRes.details.delivered, true);
+  assert.equal(harness.sent[1].to, "peer");
+  assert.equal(harness.sent[1].re, "peer-req-ask");
+  assert.equal("requireResponse" in harness.sent[1].body, false, "回复不再要求对方回信");
+
+  // 回复后 peer 解除了阻断,能再发新消息。
+  const afterRes = await tools.get("team_send").execute("k5", { to: "peer", text: "现在可以了" }, undefined, undefined, ctx);
+  assert.equal(afterRes.details.delivered, true);
+  assert.equal(harness.sent[2].re, null);
 });

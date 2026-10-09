@@ -55,6 +55,7 @@ export const zhHans = Object.freeze({
   "tool.requireResponse": "(要求回信)",
   "tool.notConnected": "未连接,消息没发出去",
   "tool.delivered": "✓ 已投递给 {to}",
+  "tool.replied": "✓ 已回复 {id}",
   "tool.noPeers": "(无其他节点)",
   "tool.currentTeam": "(当前)",
 
@@ -156,6 +157,11 @@ export const zhHans = Object.freeze({
   "dispatch.send.sent_other": "已发给 {to}({count} 个节点)",
   "dispatch.send.asReply": "(作为对 {id} 那条请求的回复)",
   "dispatch.send.awaitReply": "(已要求对方回信)",
+  "dispatch.send.blocked": "对方还有未回复的请求时不能发送:{requests}。请先用 team_reply 回复。",
+
+  "dispatch.explicitReply.usage": "用法:/team reply <requestId> <内容>。requestId 在注入的 [team 请求] 消息里。回信策略现在是 /team replies <off|remind|mirror>。",
+  "dispatch.explicitReply.unknown": "找不到可回复的请求 \"{id}\"(未知、已回复或已过期)。没有发出任何消息。",
+  "dispatch.explicitReply.sent": "(已回复 {id})",
 
   "dispatch.target.all": "全员",
   "dispatch.target.default": "默认组",
@@ -171,6 +177,7 @@ export const zhHans = Object.freeze({
   "dispatch.reply.noteMirror": "每轮输出都镜像给所有节点(fyi,不叫醒对方)",
   "dispatch.reply.set": "reply={mode}",
   "dispatch.reply.legacy": "(旧名字 \"{old}\" 仍可用,但现在叫 \"{mode}\")",
+  "dispatch.reply.movedHint": "(回信策略已搬家:请用 /team replies <off|remind|mirror>)",
 
   "session.noMatch": "没有匹配的收件人({targets})",
   "session.noPeers": "没有其他节点在线",
@@ -315,6 +322,13 @@ export const zhHans = Object.freeze({
   "ui.replyOff": "off — 不提醒,回不回由模型自己决定",
   "ui.replyRemind": "remind — 请求没被回复时提醒一次",
   "ui.replyMirror": "mirror — 每轮输出都镜像给所有节点(两边都开会互相刷屏)",
+
+  "ui.menuReplyPending_one": "↩️ 回复待处理的请求  ({count})",
+  "ui.menuReplyPending_other": "↩️ 回复待处理的请求  ({count})",
+  "ui.selectReplyPending": "回复哪一条请求?",
+  "ui.inputReplyText": "回复 {peer}",
+  "ui.replyPendingNone": "当前没有待回复的请求",
+  "ui.acPendingFrom": "来自 {peer} 的待回复请求",
 
   "ui.acDefaultGroup": "默认组(全员)",
   "ui.acAll": "全员",

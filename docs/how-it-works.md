@@ -65,7 +65,7 @@ A → B   notice    (no re, no requireResponse)        sent with team_send
 A → B   request   (no re, requireResponse: true)     sent with team_ask
           B's model sees it and is asked to answer; reminded once if it does not
 
-B → A   reply     (re = A's request id)              sent with team_send
+B → A   reply     (re = A's request id)              sent with team_reply
           A's model sees it. Nothing is sent back, so the exchange ends.
 ```
 
@@ -75,7 +75,7 @@ Rules, covered by tests:
 |---|---|
 | Request sent with `team_send` (no `requireResponse`, default) | Deliver and wake the model; **no reply expected**, no reminder |
 | Request sent with `team_ask` (`requireResponse: true`) | Deliver and wake the model; reply expected, reminded once if unanswered |
-| Reply to something the **model** sent | Deliver, with the original quoted; no reply expected |
+| Reply to something the **model** sent | Deliver; no reply expected |
 | Reply to something **you** sent via `/team send` | Card only — the model never saw your message, so waking it would confuse it |
 | Reply whose original is unknown (e.g. after a restart) | Deliver; no reply expected |
 | `fyi` broadcast (`reply=mirror`) | Card only |
@@ -88,11 +88,22 @@ and a reminder. A reply never asks for a reply even when the envelope carries
 the flag — `re` wins — which is the other half of why a conversation
 terminates.
 
-An `ask` is always a new request. Even when you still owe that peer an answer
-to an earlier request, `team_ask` is never bound to it: its `re` stays empty and
-that pending request (and any optional association) is left untouched, so a
-later `team_send` can still answer it. Answering a teammate is always
-`team_send`; `team_ask` only starts new threads.
+Replies are explicit. The injected message carries a request id and one short
+instruction to answer with `team_reply({ requestId, text })`; plain sends say no
+reply is required. Neither `team_send` nor `team_ask` is ever bound to an
+incoming request — answering a teammate is always `team_reply`, and it routes
+the answer to the original sender from the stored request rather than guessing
+from the recipient. An unknown, already-answered, or stale `requestId` is
+rejected: it sends nothing and consumes nothing.
+
+Pending requests are per request id, not per peer: two unanswered requests from
+the same teammate stay listed separately and are answered one at a time. While
+a teammate has an unanswered request, `team_send` / `team_ask` to that peer are
+rejected (the error lists the request id(s)); multi-recipient sends are
+validated as a whole and rejected atomically, with bulk broadcasts re-checked at
+the moment of transmission because a request can arrive while the confirm dialog
+is open. `reply=off` and the once-only reminder change *reminders*, never the
+obligation: the pending request survives until `team_reply` answers it.
 
 ### Delivery, and why not `followUp`
 
@@ -142,14 +153,17 @@ own task produces two assistant messages, and only the first is the reply:
 ```
 
 Sending the last one to the peer would be answering the wrong question. So the
-model replies explicitly with `team_send`; the settle boundary only checks for
-unanswered requests and reminds once. `bindReply` links an explicit reply to the
-pending request automatically, carrying its `re` and incrementing `hops` — a
-reply sent without `re` would look like a new request to the other side, and the
-two agents would keep triggering each other until the hop limit stopped them.
-When a message did **not** ask for a reply there is no pending entry, so a
-separate, reminder-free association records the incoming id; replying to it still
-carries the right `re` (and is consumed once), but no reminder is ever created.
+model replies explicitly with `team_reply({ requestId, text })`; the settle
+boundary only checks for unanswered requests and reminds once (with the request
+id). `bindRequest` resolves the request id to the original sender and carries
+its `re` and incremented `hops` — a reply sent without `re` would look like a new
+request to the other side, and the two agents would keep triggering each other
+until the hop limit stopped them. An unknown or already-answered id is rejected
+before anything is sent, and only the matched request is consumed, so two
+pending requests from one peer are answered independently. When a message did
+**not** ask for a reply there is no pending entry (and no send is blocked), but
+a separate, reminder-free association records the incoming id so an optional
+`team_reply` still carries the right `re`.
 
 Messages carry a hop count and stop at 4. That is a backstop, not the mechanism —
 the shape above is what actually terminates a conversation.
@@ -167,13 +181,16 @@ request is checked:
 
 - not yet seen by the model → leave it; the queued message will trigger the next
   turn on its own
-- seen but unanswered → remind once, with the original request attached
-- reminded once already → stop, and say so locally
+- seen but unanswered → remind once, with the original request and its id
+  attached
+- reminded once already, or `reply=off` → stay silent; the obligation is kept
 
-The last case is deliberate. Continuing to remind would mean an agent that
-decided a message needed no answer gets nagged forever; staying silent would let
-the sender wait for a reply that is never coming. Reporting it locally tells the
-human which of the two happened.
+A pending request is never dropped just because it was reminded once or because
+reminders are off: it is an obligation, and it keeps blocking new `team_send` /
+`team_ask` to that peer until `team_reply` answers it. It only leaves the queue
+when answered explicitly or displaced by the bounded queue. A peer that is
+offline is skipped (there is nowhere to send a reminder) but its request is kept
+for when it returns.
 
 ## Connecting: the three entry points
 
@@ -201,11 +218,15 @@ TEAM_LABELS=web \
 ```
 
 **`team_*` tools** — for the model and automation: `team_join`, `team_info`,
-`team_roster`, `team_send`, `team_label`, `team_leave`.
+`team_roster`, `team_send`, `team_ask`, `team_reply`, `team_label`,
+`team_leave`.
 
 `team_send` (informational) and `team_ask` (requests a reply) are the two
 message tools; `/team send` and `/team ask` are the same pair from the command
-line.
+line. `team_reply({ requestId, text })` answers a specific incoming request, and
+`/team reply <requestId> <text>` is its command form. The reminder strategy is
+`/team replies <off|remind|mirror>` (`/team reply <mode>` still works with a
+single mode word, and prints a note pointing at the new spelling).
 
 ### What gets saved, and what does not
 

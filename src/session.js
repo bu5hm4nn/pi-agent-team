@@ -56,7 +56,7 @@ const MAX_PENDING_REPLIES = 32;
  * @typedef {{ id: string, hops: number }} IncomingId
  *
  * @typedef {{ to: string, re: string, hops: number, at: number,
- *             ref: string, seen: boolean, reminded: boolean }} PendingReply
+ *             ref: string, seen: boolean, reminded: boolean, dropped?: boolean }} PendingReply
  *
  * @typedef {{ type: "inject", payload: string, from: string }
  *   | { type: "card", kind: "receive"|"send"|"reply"|"failed"|"fyi", peer: string, text: string, reason?: string }
@@ -84,7 +84,7 @@ export function createSessionState(self = "") {
     selfLabels: [],
     reply: "remind",
     /**
-     * 已收到、但还没有得到回复的队友请求。
+     * 已收到、但还没有得到回复的队友请求(obligations)。
      *
      * ── 为什么不再自动回信,而是让模型显式回复 ──
      *
@@ -100,24 +100,29 @@ export function createSessionState(self = "") {
      *   150032ms  assistant "FULLDONE"        ← 原任务的收尾
      *
      * 按"最后一段"回信会把 FULLDONE 发给队友,答非所问。所以改为:模型用
-     * team_send 显式回复,这里只负责跟踪"谁还没被回复",必要时提醒一次。
+     * team_reply({ requestId, text }) 显式回复,这里只负责跟踪"谁还没被回复"。
+     *
+     * ── 一个队友可以有多条 ──
+     *   键是每条请求自己的 re(request id),不是一个队友一条:同一队友连发
+     *   两条请求时,两条都要能被单独回复,不能一条把另一条顶掉或一起清掉。
+     *   发送阻断(send/ask 到有待回复的人被拒)也按这些记录判断。
      */
     pendingReplies: [],
     /**
-     * 最近一条来自某队友的入站消息 id,只用于把**可选回复**关联回它。
+     * 最近一条来自某队友的入站**通知**(未要求回信)的消息 id,只用于把
+     * 可选回复关联回它。
      *
      * ── 为什么不和 pendingReplies 合并 ──
-     *   pendingReplies 表达的是"对方要求了回信、我们还没回"——它驱动提醒。
-     *   而现在消息默认不要求回信,却仍然值得把回复闭合到原消息(re 指向它),
-     *   否则对端会把我们的回复当成一条全新请求。两者语义不同,所以分开存:
-     *   关联不产生任何提醒,只让 bindReply 拿得到入站 id。
+     *   pendingReplies 表达的是"对方要求了回信、我们还没回"——它是义务,
+     *   会阻断对同一队友的 send/ask。通知没有要求回信,不是义务,但模型若
+     *   主动回复(team_reply),仍应把 re 指向原消息,否则对端会把回复当成
+     *   一条全新请求。所以分开存:关联不产生提醒,也不阻断发送。
      *
      * 只记"请求"(re 为空、非 fyi 的注入消息),回复不记 —— 回复本身已经
-     * 带着 re,不需要再被当成另一条消息去关联。
+     * 带着 re,不需要再被当成另一条消息去关联。每个队友只留最新一条。
      */
     incomingIds: new Map(),
     /** 上一轮的输出文本,供 reply=mirror 镜像用 */
-    lastText: "",
     lastText: "",
   };
 }
@@ -368,32 +373,30 @@ export function classifyInbound(s, env) {
 }
 
 /** 构造注入给模型的文本。要求回信与不要求回信的措辞必须不同,见 classifyInbound 注释。 */
-export function buildPayload(from, text, cls) {
+export function buildPayload(from, text, cls, requestId = null) {
   if (cls.kind === "reply") {
-    const quote = cls.original ? `你之前发给它的消息「${excerpt(cls.original, 120)}」` : "你之前发出的消息";
     return (
       `[来自 ${from} 的 team 回复]\n${text}\n\n---\n` +
-      `上面是 teammate ${from} 对${quote}的回复(不是真人用户在打字)。` +
-      `你这一轮的输出【不会】自动回传给 ${from}。` +
-      `如果需要继续和它对话,显式调用 team_send;否则直接处理这条回复即可。`
+      `上面是 teammate ${from} 对你的消息的回复(不是真人用户)。这是回复,不需要再回复。`
     );
   }
 
-  // 不要求回信时,要把“无需回信”说清楚 —— 否则模型会习惯性地回一句
-  // 确认,而对端并不需要,白烧一轮完整思考。
-  const replyHint =
-    cls.requireResponse === true
-      ? `要回复它,显式调用 team_send({ to: "${from}", text: "..." });它会和这条请求关联起来。`
-      : `这条消息没有要求回复(发送方未要求回信);不需要回复时直接处理即可,不要为了确认而回信。\n` +
-        `如果任务本身需要回报结果,仍可显式调用 team_send({ to: "${from}", text: "..." }) —— 它同样会关联到这条消息。`;
+  // 指令要短、要唯一:模型看到的就是这一句。要求回信时给出 request id
+  // 让它能直接调 team_reply;未要求回信时明确说无需回信,但仍给出可选的
+  // 显式回复方式(基于同一 request id),这样主动回报不会退化成新请求。
+  const replyLine = requestId
+    ? cls.requireResponse === true
+      ? `要回复,显式调用 team_reply({ requestId: "${requestId}", text: "..." })。`
+      : `这条消息没有要求回复,无需回信。如确需回复,可调用 team_reply({ requestId: "${requestId}", text: "..." })。`
+    : cls.requireResponse === true
+      ? `要回复,显式调用 team_reply({ text: "..." })。`
+      : `这条消息没有要求回复,无需回信。`;
 
+  const head = cls.requireResponse === true ? `[来自 ${from} 的 team 请求]` : `[来自 ${from} 的 team 消息]`;
   return (
-    `[来自 ${from} 的 team 消息]\n${text}\n\n---\n` +
-    `上面是 teammate ${from} 发来的消息原文(不是真人用户在打字)。` +
-    `按内容本身的意思回应:是任务就执行,是讨论/诗句/提问就接着往下走。` +
-    `不要反问"需要我做什么",也不要复述确认。\n` +
-    `你这一轮的输出【不会】自动回传给 ${from}。` +
-    replyHint
+    `${head}\n${text}\n\n---\n` +
+    `上面是 teammate ${from} 发来的消息原文(不是真人用户)。按内容本身的意思回应:是任务就执行,是讨论就接着走;不要反问"需要我做什么"。\n` +
+    `你这一轮的输出【不会】自动回传给 ${from}。${replyLine}`
   );
 }
 
@@ -492,7 +495,7 @@ export function handleIncoming(s, env, now = Date.now()) {
   }
 
   const hops = typeof body.hops === "number" ? body.hops : 0;
-  const payload = buildPayload(env.from, text, cls);
+  const payload = buildPayload(env.from, text, cls, env.id);
   const actions = [{ type: "card", kind: "receive", peer: env.from, text }];
 
   if (cls.requireResponse) {
@@ -507,7 +510,7 @@ export function handleIncoming(s, env, now = Date.now()) {
       });
     }
   } else if (cls.kind === "request") {
-    // 不要求回信,仍记下入站 id:模型若选择回复,bindReply 要能带上 re,
+    // 不要求回信,仍记下入站 id:模型若选择主动回复,bindRequest 要能带上 re,
     // 对端才认得出是回复而不是一条新请求。这不会产生任何提醒。
     associateIncoming(s, env.from, env.id, hops);
   }
@@ -556,14 +559,14 @@ export const TEAM_MESSAGE_TYPE = "team-msg";
  *
  * 用 agent_settled 触发,不用 agent_end:后者之后还可能有重试、
  * compaction、queued continuation,拿它当"结束"会推中间态。
+ *
+ * ── pendingReplies 的寿命与提醒策略解耦 ──
+ *   pendingReplies 是"对方要求了回信、模型还没回"的义务,它同时驱动
+ *   发送阻断。它只能被**显式 team_reply** 消掉(或内存上限挤掉),不能
+ *   因为 reply=off / 已提醒过就觉得可以忘了 —— 那样义务会被静默丢掉,
+ *   本机对同一队友的发送也不再被阻断。所以这里任何分支都不清队列。
  */
 export function onTurnSettled(s) {
-  if (s.reply === "off") {
-    s.pendingReplies = [];
-    s.lastText = "";
-    return [];
-  }
-
   if (s.reply === "mirror") {
     const text = s.lastText;
     if (!text.trim()) return [];
@@ -572,6 +575,7 @@ export function onTurnSettled(s) {
     if (list.length === 0) return [];
     // fyi:true 让收件人只显示卡片,不叫醒它的模型。否则 N 个节点都开
     // always 时,每轮都会触发 N-1 轮新思考。
+    // mirror 只是推自己的输出,不会把任何待回复当成已回复 —— 义务仍在。
     return list.map((m) => ({
       type: "send",
       to: m.name,
@@ -586,76 +590,52 @@ export function onTurnSettled(s) {
     }));
   }
 
-  // auto:不再自动把某段文本当成回复发出去 —— 实测模型会在同一个 run 里
-  // 先回应队友再做完原任务,按段落猜归属会把原任务的收尾(i.e. "DONE")
-  // 发给队友。改为:只在请求还没被回复时提醒模型一次。
-  const actions = [];
-  const online = new Set(others(s).map((m) => m.name));
-  const stillPending = [];
-
-  for (const p of s.pendingReplies) {
-    if (!online.has(p.to)) {
-      // 对方已经不在线了,再提醒也没有意义
-      actions.push({
-        type: "card",
-        kind: "failed",
-        peer: p.to,
-        text: "",
-        reason: t(M.session.peerOfflinePending, { to: p.to }),
-      });
-      continue;
-    }
-
-    if (!p.seen) {
-      // 模型还没看到这条消息。它会被排进下一个 turn,那时再判断是否需要提醒。
-      stillPending.push(p);
-      continue;
-    }
-
-    if (!p.reminded) {
-      p.reminded = true;
-      stillPending.push(p);
-      actions.push({ type: "remind", pending: [p.to], ref: p.ref });
-      continue;
-    }
-
-    // 已经提醒过一次仍未回复。不再打扰,但在本机说明清楚 —— 静默丢掉会
-    // 让用户以为对方收到了回复。
-    actions.push({
-      type: "card",
-      kind: "failed",
-      peer: p.to,
-      text: "",
-      reason: t(M.session.remindedStillPending, { to: p.to }),
-    });
+  // off:不提醒,但不清空待回复 —— 义务还在,发送阻断也还在。
+  if (s.reply === "off") {
+    s.lastText = "";
+    return [];
   }
 
-  s.pendingReplies = stillPending;
+  // remind:对每条未回复的请求最多提醒一次。已经提醒过的不再重复打扰,
+  // 但也不丢弃 —— 它一直留到模型用 team_reply 显式回复,或内存上限挤掉。
+  const actions = [];
+  const online = new Set(others(s).map((m) => m.name));
+
+  for (const p of s.pendingReplies) {
+    if (!online.has(p.to)) continue; // 对端不在线:提醒也送不进去,留着等它回来
+    if (!p.seen) continue; // 模型还没看到,下一轮它自己会触发
+    if (p.reminded) continue; // 只提醒一次,不重复打扰
+    p.reminded = true;
+    actions.push({ type: "remind", pending: [p.to], ref: p.ref, requestId: p.re });
+  }
+
   return actions;
 }
 
 /**
- * 记下某队友最近一条入站请求的 id,供可选回复关联(不产生提醒)。
- * 每个队友只保留最新一条 —— 他连发三条,回一次就够。
+ * 记下某队友最近一条入站**通知**的 id,供可选回复关联(不产生提醒,
+ * 也不阻断发送)。每个队友只保留最新一条 —— 他连发三条,回一次就够。
  */
 function associateIncoming(s, from, id, hops) {
   rememberBounded(s.incomingIds, from, { id, hops });
 }
 
 /**
- * 记录一条待回复的请求。
+ * 记录一条待回复的请求(义务)。
  *
- * 同一个发信人只保留最新一条:它连发三条时,三条都进了模型,但回一次
- * 就够了 —— 否则三个队友各发三条会得到九条回信,而它们本来是一段回答。
+ * 以 request id(re)为键:同一队友可以同时有多条,
+ * 每条都要能被 team_reply 单独回复。重复投递同一 id 不会重复入库
+ * (handleIncoming 的 seen 已经挡住,这里再兜一层)。
+ * 超过内存上限时挤掉最早的一条 —— 静默丢弃会让发信人一直等下去,
+ * 所以调用方会为被挤掉的那条出一张失败卡片。
  */
 export function rememberPending(s, { from, id, hops, ref }) {
-  const existing = s.pendingReplies.findIndex((p) => p.to === from);
-  if (existing >= 0) s.pendingReplies.splice(existing, 1);
+  if (s.pendingReplies.some((p) => p.re === id)) return null;
 
+  let dropped = null;
   if (s.pendingReplies.length >= MAX_PENDING_REPLIES) {
-    const dropped = s.pendingReplies.shift();
+    dropped = s.pendingReplies.shift();
     dropped.dropped = true;
-    return dropped;
   }
 
   s.pendingReplies.push({
@@ -667,46 +647,85 @@ export function rememberPending(s, { from, id, hops, ref }) {
     seen: false,
     reminded: false,
   });
+  return dropped;
+}
+
+/** 某个队友所有还没被回复的请求。 */
+export function pendingForPeer(s, peer) {
+  return s.pendingReplies.filter((p) => p.to === peer);
+}
+
+/**
+ * 在一组收件人里找出"还有未回复请求"的人。
+ *
+ * 发送(send/ask)前的阻断靠它:对这些人必须先 team_reply,不能装作
+ * 新消息发过去 —— 否则对方的请求被无声地忽略,而义务还在,本机会
+ * 一直卡在那条请求上。返回每人对应的 request id 列表,供错误信息列出。
+ *
+ * @returns {{ peer: string, ids: string[] }[]}
+ */
+export function blockedTargets(s, targets) {
+  const out = [];
+  for (const peer of targets ?? []) {
+    const ids = pendingForPeer(s, peer).map((p) => p.re);
+    if (ids.length) out.push({ peer, ids });
+  }
+  return out;
+}
+
+/** 按 request id 找一条未回复的请求(义务)。 */
+export function findPendingById(s, requestId) {
+  return s.pendingReplies.find((p) => p.re === requestId) ?? null;
+}
+
+/** 按 request id 找最近一条"未要求回信"的入站关联(可选回复)。 */
+export function findIncomingById(s, requestId) {
+  for (const [from, v] of s.incomingIds ?? []) {
+    if (v.id === requestId) return { from, id: v.id, hops: v.hops };
+  }
   return null;
 }
 
 /**
- * 把一次出站发送绑定到某个入站消息上。仅供普通 send 使用。
+ * 把 team_reply 的 requestId 解析成一次真正的发送。
  *
- * 优先绑定"要求回信的待回复":那是真正的请求,回它就把队列清掉。
- * 没有待回复时,退回到"入站关联" —— 对方刚发过一条不要求回信的消息,
- * 我们回它同样应带上 re。两种情况都返回对方的消息 id,跳数 +1。
+ * 只认显式的 request id —— 不再靠"发给谁"反推哪条是回复,所以 send/ask
+ * 不会被误当成回复。优先级:未回复的请求(义务) > 未要求回信的可选关联。
+ * 优先义务是因为它可能带提醒、且需要解除阻断。
  *
- * 关联是一次性的:用掉即删,免得后续一条全新的消息被误当成对旧消息的回复。
+ * 不修改状态:调用方必须在**真正发出去之后**再 consumeRequest,否则
+ * 离线/校验失败时会把义务提前消费掉。
  *
- * 谁调用它由调用方决定 —— team_ask 是显式的新请求,在 dispatch 的
- * doTransmit 里直接跳过这个函数(re 为空、不消费任何待回复/关联),
- * 所以这里不需要"要求回信"这层判断。
- *
- * @returns {{ replyTo: string|null, re: string|null, hops: number }}
+ * @returns {{ replyTo: string, re: string, hops: number, kind: "pending"|"optional" }|null}
  */
-export function bindReply(s, targets) {
-  const list = Array.isArray(targets) ? targets : [targets];
-  if (list.length !== 1) return { replyTo: null, re: null, hops: 0 };
+export function bindRequest(s, requestId) {
+  const p = findPendingById(s, requestId);
+  if (p) return { replyTo: p.to, re: p.re, hops: Math.min(p.hops + 1, MAX_HOPS), kind: "pending" };
 
-  const to = list[0];
-  const idx = s.pendingReplies.findIndex((p) => p.to === to);
-  if (idx >= 0) {
-    const p = s.pendingReplies[idx];
-    // 回一次就把它所有的请求都算答完 —— 它连发三条,回一次就够
-    s.pendingReplies = s.pendingReplies.filter((x) => x.to !== to);
-    // 关联也一并消费:这条已经回过,别再让后续消息挂到同一个入站 id 上
-    s.incomingIds?.delete(to);
-    return { replyTo: to, re: p.re, hops: Math.min(p.hops + 1, MAX_HOPS) };
+  const near = findIncomingById(s, requestId);
+  if (near) return { replyTo: near.from, re: near.id, hops: Math.min(near.hops + 1, MAX_HOPS), kind: "optional" };
+
+  return null;
+}
+
+/**
+ * 回复成功发出后,只消费匹配的那一条。
+ * 同一队友的其它请求必须原样保留 —— 不能一条回复把同一队友的队列全清掉。
+ *
+ * @returns {"pending"|"optional"|null} 实际消费掉的是哪一类
+ */
+export function consumeRequest(s, requestId) {
+  const before = s.pendingReplies.length;
+  s.pendingReplies = s.pendingReplies.filter((p) => p.re !== requestId);
+  if (s.pendingReplies.length !== before) return "pending";
+
+  for (const [from, v] of s.incomingIds ?? []) {
+    if (v.id === requestId) {
+      s.incomingIds.delete(from);
+      return "optional";
+    }
   }
-
-  const near = s.incomingIds?.get(to);
-  if (near) {
-    s.incomingIds.delete(to);
-    return { replyTo: to, re: near.id, hops: Math.min(near.hops + 1, MAX_HOPS) };
-  }
-
-  return { replyTo: null, re: null, hops: 0 };
+  return null;
 }
 
 /** 从 assistant 消息里取文本 */

@@ -222,17 +222,21 @@ async function runIntentions(
       case "remind": {
         // 请求已送达并且模型看到过,但这一轮结束时还没有回复。提醒一次,
         // 并把这一轮叫起来 —— 否则忙时看到的请求会一直悬着没人处理。
+        // 提醒里必须带上 request id:回复只能用 team_reply,不能靠 team_send。
         const who = (it.pending as string[]) ?? [];
         if (!who.length) break;
         const payload = String(it.ref ?? "");
+        const requestId = String(it.requestId ?? "");
+        const how = requestId
+          ? `现在就回复它:team_reply({ requestId: "${requestId}", text: "..." })。`
+          : `现在就回复它:team_reply({ requestId: "<注入消息里的 id>", text: "..." })。`;
         try {
           apiRef?.sendMessage(
             {
               customType: TEAM_MESSAGE_TYPE,
               content:
                 `[team 待回复]${who.join(", ")} 之前发来的请求还没有回复。` +
-                `现在就回复它:team_send({ to: "${who[0]}", text: "..." })。` +
-                `如果本来就不需要回复,忽略这条即可。\n\n${payload}`,
+                `${how}如果本来就不需要回复,忽略这条即可。\n\n${payload}`,
               display: false,
             },
             { triggerTurn: true },
@@ -290,9 +294,12 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
         return false;
       }
       // 确认后走同一条发送路径(doTransmit),不复制逻辑。
-      // requireResponse 跟着确认数据一起回来,所以 ask 不会在确认后退化成 send。
+      // requireResponse 与 targets 跟着确认数据一起回来:ask 不会在确认后
+      // 退化成 send,而且 doTransmit 能对**真正的收件人**重新校验待回复
+      // 阻断 —— 对话框弹出到这里之间可能刚好收到新请求。
       const to = party.to as string | string[];
-      const local = { targets: new Array(n).fill("") as string[], unknown: [] };
+      const targets = (party.targets as string[]) ?? [];
+      const local = { targets, unknown: [] as string[] };
       const r = doTransmit(to, String(party.text), (party.origin as "user" | "model") ?? "user", local, state, envOf(), {
         requireResponse: party.requireResponse === true,
       });
@@ -551,6 +558,18 @@ function renderTransmitResult(
   return new Text(theme.fg("success", t(M.tool.delivered, { to: d?.to ?? "?" })), 0, 0);
 }
 
+function renderReplyResult(
+  result: { details?: unknown },
+  _options: unknown,
+  theme: Theme,
+) {
+  const d = result.details as { delivered?: boolean; requestId?: string; error?: string } | undefined;
+  if (d?.delivered === false) {
+    return new Text(theme.fg("error", `⚠️ ${d.error ?? t(M.tool.notConnected)}`), 0, 0);
+  }
+  return new Text(theme.fg("success", t(M.tool.replied, { id: d?.requestId ?? "?" })), 0, 0);
+}
+
 /**
  * 执行路径:team_send → 子命令 "send",team_ask → 子命令 "ask"。
  *
@@ -577,6 +596,34 @@ function makeTransmitExecute(sub: "send" | "ask") {
     return {
       content: [{ type: "text", text: t(M.tool.receipt, { summary: r.lines.join(" ") }) }],
       details: { delivered: true, to: params.to },
+    };
+  };
+}
+
+/**
+ * team_reply 的执行路径:子命令 "reply",requestId 必须存在。
+ * 失败(缺 id / id 未知 / 离线)不会发任何东西,待回复也保留。
+ */
+function makeReplyExecute() {
+  return async (
+    _toolCallId: string,
+    params: { requestId: string; text: string },
+    _signal: unknown,
+    _onUpdate: unknown,
+    ctx: ExtensionContext,
+  ) => {
+    ctxRef = ctx;
+    const r = await invoke({ sub: "reply", args: [params.requestId, params.text], origin: "model" }, ctx);
+
+    if (!r.ok) {
+      return {
+        content: [{ type: "text", text: t(M.tool.sendFailed, { error: r.error }) }],
+        details: { delivered: false, requestId: params.requestId, error: r.error },
+      };
+    }
+    return {
+      content: [{ type: "text", text: t(M.tool.receipt, { summary: r.lines.join(" ") }) }],
+      details: { delivered: true, requestId: params.requestId },
     };
   };
 }
@@ -803,12 +850,14 @@ export default function (pi: ExtensionAPI) {
       labels.length ? `可用分组:${labels.map((l) => `@${l}`).join(" ")}` : "",
       "",
       "**发送**:默认用 `team_send({ to, text })` —— 送达并唤醒对方,但不要求回信。`to` 可以是节点名、`@label`(分组)、`\"*\"`(全员)、`\"@default\"`(默认组),或数组。",
-      "**要求回信**:需要对方回话时用 `team_ask({ to, text })` —— 对方未回复会被提醒一次。它和所有工具一样立即返回投递回执,不会同步等答案;回信稍后作为一条 team 消息送到。`team_ask` 永远是一条新请求,不会算作对旧消息的回复;要回复队友请用 `team_send`。",
+      "**要求回信**:需要对方回话时用 `team_ask({ to, text })` —— 对方未回复会被提醒一次。两者都立即返回投递回执,不会同步等答案;回信稍后作为一条 team 消息送到。",
+      "**回复队友**:要回复收到的请求,用 `team_reply({ requestId, text })`,requestId 就是注入消息里给出的那个。`team_send` / `team_ask` 都不会自动算作回复。回复本身不再要求对方回信,所以对话能停下来。",
+      "**有待回复时**:对方还有未回复的请求时,对它的 send/ask 会被拒绝(错误里会列出 request id),必须先用 `team_reply` 回掉;这不影响其他节点。",
       "**查成员**:调用 `team_roster()`,或 `team_info({ what: \"peers\" })`。",
       "",
-      "**接收**:输入里出现 `[来自 <名字> 的 team 消息]` 前缀时,那是另一个 agent 发来的消息,不是真人打字。",
+      "**接收**:输入里出现 `[来自 <名字> 的 team 消息]` 或 `[来自 <名字> 的 team 请求]` 前缀时,那是另一个 agent 发来的消息,不是真人打字。",
       "按内容本身的意思回应:是任务就执行,是讨论就接着走。不要反问「需要我做什么」。",
-      "**回复要用 team_send** —— 你这一轮的输出不会自动回传。发给谁就是回复谁,不需要额外参数。",
+      "**回复要用 team_reply** —— 你这一轮的输出不会自动回传,也不需要额外指定发给谁(回复会自动送达原发信人)。",
       "只有对方用 team_ask 发的消息才要求回复;team_send 的通知不需要回信,也不会有提醒。",
       "",
       "**克制**:每次发送都占用对方一轮完整思考,群发更贵。除非任务需要,不要主动发消息。",
@@ -827,12 +876,13 @@ export default function (pi: ExtensionAPI) {
     name: "team_send",
     label: "Team Send",
     description:
-      "给同一 team 里的其他 Pi 节点发消息(默认不要求回信),也用它回复收到的队友消息。to 可以是节点名、'@label' 分组、'*' 全员、'@default' 默认组,或逗号分隔的名字数组。名字从 team_roster 或系统提示的 Team 段落获取。",
-    promptSnippet: "team_send(to, text) — 给一个或一组 Pi 节点发消息,默认不要求回信(也是回复队友的方式)",
+      "给同一 team 里的其他 Pi 节点发消息(默认不要求回信)。to 可以是节点名、'@label' 分组、'*' 全员、'@default' 默认组,或逗号分隔的名字数组。名字从 team_roster 或系统提示的 Team 段落获取。回复队友请用 team_reply。",
+    promptSnippet: "team_send(to, text) — 给一个或一组 Pi 节点发消息,默认不要求回信",
     promptGuidelines: [
       "Use team_send only when the task spans another machine; each recipient costs a full model turn.",
       "team_send is informational: it wakes the peer but does not ask for a reply and creates no reminder. Call team_ask when you actually need an answer.",
-      "Replies are NOT automatic: to answer a teammate, call team_send back to the same peer; it links to their message automatically.",
+      "team_send never counts as a reply: to answer a teammate's request use team_reply({ requestId, text }).",
+      "If a recipient has an unanswered request, team_send to it fails and lists the request id; reply with team_reply first.",
       "Broadcasting with '*' or '@label' wakes every matching node; prefer naming recipients.",
     ],
     parameters: transmitToolParams(),
@@ -845,18 +895,48 @@ export default function (pi: ExtensionAPI) {
     name: "team_ask",
     label: "Team Ask",
     description:
-      "给同一 team 里的其他 Pi 节点发一条要求回信的消息:对方会被唤醒,如果没回复会被提醒一次。to 的写法和 team_send 相同。返回的是投递回执,不会同步等待答案 —— 回信会作为一条 team 消息稍后送到。",
+      "给同一 team 里的其他 Pi 节点发一条要求回信的消息:对方会被唤醒,如果没回复会被提醒一次。to 的写法和 team_send 相同。返回的是投递回执,不会同步等待答案 —— 回信会作为一条 team 消息稍后送到。回复队友请用 team_reply。",
     promptSnippet: "team_ask(to, text) — 发一条要求对方回信的消息(未回复会被提醒一次)",
     promptGuidelines: [
       "Use team_ask only when you actually need the peer's answer; each recipient costs a full model turn and an unanswered ask is reminded once.",
       "team_ask returns immediately with a delivery receipt — it does not wait for the answer; the reply arrives later as an injected team message.",
-      "team_ask always starts a NEW request: it is never counted as a reply to an earlier message, even from the same peer. Use team_send to answer a teammate.",
+      "team_ask always starts a NEW request: it never counts as a reply to an earlier message. Answer a teammate with team_reply.",
+      "If a recipient has an unanswered request, team_ask to it fails and lists the request id; reply with team_reply first.",
       "A reply never asks for a reply, so conversations still end.",
     ],
     parameters: transmitToolParams(),
     renderCall: (args, theme) => renderTransmitCall("team_ask", true, args, theme),
     renderResult: renderTransmitResult,
     execute: makeTransmitExecute("ask"),
+  });
+
+  pi.registerTool({
+    name: "team_reply",
+    label: "Team Reply",
+    description:
+      "回复一条来自队友的 team 请求,按注入消息里给出的 requestId 精确回复。requestId 是必需的:未知/已回复/过期的 id 会被拒绝,不会发出任何消息。回复会送达原发信人,且不会再要求对方回信。待回复的请求必须用这个工具回掉 —— team_send / team_ask 都不会自动算作回复。",
+    promptSnippet: "team_reply(requestId, text) — 回复一条队友请求(用注入消息里的 requestId)",
+    promptGuidelines: [
+      "Use team_reply — not team_send — to answer a teammate; pass the exact requestId from the injected [team request] message.",
+      "requestId is required and must be an existing unanswered request: an unknown, already-answered, or stale id fails and sends nothing.",
+      "The reply goes back to the original sender (no recipient guessing) and never requests a further reply.",
+      "If team_send/team_ask fails because a reply is pending, answer the listed request with team_reply first.",
+    ],
+    parameters: Type.Object({
+      requestId: Type.String({ description: "要回复的请求 id:注入消息 [team 请求] / [team 消息] 里给出的那个" }),
+      text: Type.String({ description: "回复内容" }),
+    }),
+    renderCall: (args, theme) =>
+      new Text(
+        theme.fg("toolTitle", theme.bold("team_reply ")) +
+          theme.fg("accent", String(args?.requestId ?? "?")) +
+          "\n" +
+          theme.fg("muted", `  ${String(args?.text ?? "").split("\n")[0]}`),
+        0,
+        0,
+      ),
+    renderResult: renderReplyResult,
+    execute: makeReplyExecute(),
   });
 
   pi.registerTool({
@@ -1081,7 +1161,7 @@ export default function (pi: ExtensionAPI) {
     description: t(M.command.team),
     getArgumentCompletions(prefix) {
       const subs = [
-        "status", "peers", "create", "join", "leave", "mode", "label", "send", "ask", "reply", "lang", "on", "off",
+        "status", "peers", "create", "join", "leave", "mode", "label", "send", "ask", "reply", "replies", "lang", "on", "off",
       ];
       if (!prefix.includes(" ")) {
         return subs.filter((s) => s.startsWith(prefix)).map((s) => ({ value: s, label: s, description: `/team ${s}` }));
@@ -1153,7 +1233,16 @@ export default function (pi: ExtensionAPI) {
         return completeToken(["broker", "mesh", "swim"].map((m) => ({ option: m })));
       }
 
-      if (sub === "reply" || sub === "announce") {
+      if (sub === "reply" && rest.length <= 1) {
+        // 显式回复的第一参数是 requestId。列出当前待回复的 id,
+        // 让人不靠手敲 —— 也就是把 team_reply 暴露在命令补全里。
+        const partialId = rest[0] ?? "";
+        return state.pendingReplies
+          .filter((p) => p.re.startsWith(partialId))
+          .map((p) => ({ value: p.re, label: p.re, description: t(M.ui.acPendingFrom, { peer: p.to }) }));
+      }
+
+      if (sub === "replies" || sub === "announce") {
         return ["off", "remind", "mirror"]
           .filter((m) => m.startsWith(partial))
           .map((m) => ({ value: m, label: m }));
@@ -1337,6 +1426,30 @@ export default function (pi: ExtensionAPI) {
     };
 
     const choices: { label: string; run: () => Promise<void> }[] = [
+      // 有待回复的请求时才出现:选一条,输入正文,走显式 reply。
+      // 这是 team_reply 在菜单里的入口 —— 否则菜单用户无从回复队友。
+      ...(state.pendingReplies.length
+        ? [
+            {
+              label: t(M.ui.menuReplyPending, { count: state.pendingReplies.length }),
+              run: async () => {
+                const pending = [...state.pendingReplies];
+                if (!pending.length) return void ctx.ui.notify(t(M.ui.replyPendingNone), "info");
+                const pick = await ctx.ui.select(
+                  t(M.ui.selectReplyPending),
+                  pending.map((p) => `${p.re}  —  ${p.to}`),
+                );
+                if (!pick) return;
+                const req = pending.find((p) => pick.startsWith(p.re));
+                if (!req) return;
+                const text = await ctx.ui.input(t(M.ui.inputReplyText, { peer: req.to }), t(M.ui.placeholderMessage));
+                if (!text?.trim()) return;
+                const r = await invoke({ sub: "reply", args: [req.re, text] }, ctx);
+                if (!r.ok) ctx.ui.notify(r.error!, "error");
+              },
+            },
+          ]
+        : []),
       {
         label: t(M.ui.menuViewMembers),
         run: async () => {
@@ -1491,7 +1604,8 @@ export default function (pi: ExtensionAPI) {
             t(M.ui.replyMirror),
           ]);
           if (!pick) return;
-          const r = await invoke({ sub: "reply", args: [pick.split(" ")[0]] }, ctx);
+          // 回信策略现在走 replies 子命令 —— reply 已被显式回复占用。
+          const r = await invoke({ sub: "replies", args: [pick.split(" ")[0]] }, ctx);
           if (!r.ok) ctx.ui.notify(r.error!, "error");
         },
       },

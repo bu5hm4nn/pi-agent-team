@@ -58,6 +58,7 @@ export const enUS = Object.freeze({
   "tool.requireResponse": "(needs reply)",
   "tool.notConnected": "Not connected; the message was not sent",
   "tool.delivered": "✓ delivered to {to}",
+  "tool.replied": "✓ replied to {id}",
   "tool.noPeers": "(no other nodes)",
   "tool.currentTeam": "(current)",
 
@@ -159,6 +160,11 @@ export const enUS = Object.freeze({
   "dispatch.send.sent_other": "Sent to {to} ({count} nodes)",
   "dispatch.send.asReply": "(as a reply to the request {id})",
   "dispatch.send.awaitReply": "(asked the recipient to reply)",
+  "dispatch.send.blocked": "Cannot send while a reply is pending: {requests}. Use team_reply to answer first.",
+
+  "dispatch.explicitReply.usage": "Usage: /team reply <requestId> <message>. The requestId is in the injected [team request] message. The reply strategy is now /team replies <off|remind|mirror>.",
+  "dispatch.explicitReply.unknown": "No pending request \"{id}\" to reply to (unknown, already answered, or stale). Nothing was sent.",
+  "dispatch.explicitReply.sent": "(replied to {id})",
 
   "dispatch.target.all": "everyone",
   "dispatch.target.default": "default group",
@@ -174,6 +180,7 @@ export const enUS = Object.freeze({
   "dispatch.reply.noteMirror": "Mirrors every turn's output to all nodes (fyi, does not wake the peer)",
   "dispatch.reply.set": "reply={mode}",
   "dispatch.reply.legacy": "(the old name \"{old}\" still works, but it is now called \"{mode}\")",
+  "dispatch.reply.movedHint": "(the reply strategy moved: use /team replies <off|remind|mirror>)",
 
   "session.noMatch": "No matching recipients ({targets})",
   "session.noPeers": "No other nodes online",
@@ -318,6 +325,13 @@ export const enUS = Object.freeze({
   "ui.replyOff": "off — no reminder; whether to reply is the model's decision",
   "ui.replyRemind": "remind — reminds once when a request goes unanswered",
   "ui.replyMirror": "mirror — broadcasts every turn's output to all nodes (enabling it on both sides floods both with repeated messages)",
+
+  "ui.menuReplyPending_one": "↩️ Reply to a pending request  ({count})",
+  "ui.menuReplyPending_other": "↩️ Reply to a pending request  ({count})",
+  "ui.selectReplyPending": "Reply to which request?",
+  "ui.inputReplyText": "Reply to {peer}",
+  "ui.replyPendingNone": "No pending requests to reply to",
+  "ui.acPendingFrom": "pending request from {peer}",
 
   "ui.acDefaultGroup": "default group (everyone)",
   "ui.acAll": "everyone",

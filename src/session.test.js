@@ -16,18 +16,22 @@ import {
   MAX_HOPS,
   TEAM_MESSAGE_TYPE,
   applyRoster,
-  bindReply,
+  bindRequest,
+  blockedTargets,
   buildPayload,
   classifyInbound,
+  consumeRequest,
   createSessionState,
   excerpt,
   extractText,
+  findPendingById,
   handleIncoming,
   knownLabels,
   observeMessage,
   onTurnSettled,
   others,
   parseRecipients,
+  pendingForPeer,
   rememberPending,
   resolveLocal,
   transmitBodyFrom,
@@ -135,22 +139,23 @@ test("缺口 1:重启后到达的回复,原消息未知 → 注入但不自动�
   assert.equal(cls.original, null);
 });
 
-test("缺口 1:重启后待回复失效,settled 时不误发", () => {
+test("缺口 1:重启后待回复不会因对端不在 roster 就被丢掉", () => {
   // 重启后 roster 是空的,而队列里还留着一条来自已消失节点的请求。
+  // 义务不能因为“看不到人”就静默消失 —— 它仍然阻断本机对那个队友的
+  // send/ask,直到它回来、被显式 team_reply 回掉,或内存上限挤掉。
   const s = session("me", []);
   rememberPending(s, { from: "gone-peer", id: "r", hops: 0, ref: "p" });
   s.pendingReplies[0].seen = true;
 
   const actions = onTurnSettled(s);
-  assert.equal(actions[0].type, "card");
-  assert.equal(actions[0].kind, "failed", "对端已不在 roster,不能假装提醒送到了");
-  assert.match(actions[0].reason, /已离线/);
-  assert.equal(s.pendingReplies.length, 0);
+  assert.deepEqual(actions, [], "对端不在线时提醒也送不进去,但不误发");
+  assert.equal(s.pendingReplies.length, 1, "义务要保留");
+  assert.deepEqual(blockedTargets(s, ["gone-peer"]).map((b) => b.peer), ["gone-peer"]);
 });
 
 // ================================================================ 缺口 2:对端中途离线
 
-test("缺口 2:对端离线时,它的待回复请求出 fail 卡片", () => {
+test("缺口 2:对端离线时保留待回复,不产生提醒", () => {
   const s = session("me", [member("peer")]);
   rememberPending(s, { from: "peer", id: "req-1", hops: 0, ref: "payload" });
   s.pendingReplies[0].seen = true; // 模型看到过
@@ -158,14 +163,17 @@ test("缺口 2:对端离线时,它的待回复请求出 fail 卡片", () => {
   applyRoster(s, { members: [member("me")] }); // 对端掉线
 
   const actions = onTurnSettled(s);
-  assert.equal(actions.length, 1);
-  assert.equal(actions[0].type, "card");
-  assert.equal(actions[0].kind, "failed");
-  assert.match(actions[0].reason, /peer 已离线/);
-  assert.equal(s.pendingReplies.length, 0, "离线的不该继续留在队列里");
+  assert.deepEqual(actions, [], "离线时提醒没有意义,但也不能丢义务");
+  assert.equal(s.pendingReplies.length, 1, "离线不该把义务抹掉");
+
+  // 对端回来之后仍会被提醒(reminded 还是 false)
+  applyRoster(s, { members: [member("me"), member("peer")] });
+  const back = onTurnSettled(s);
+  assert.equal(back[0].type, "remind");
+  assert.equal(back[0].requestId, "req-1", "提醒要带上 request id,好让模型用 team_reply");
 });
 
-test("缺口 2:看到过但没回复 → 提醒一次,带上 re 原文", () => {
+test("缺口 2:看到过但没回复 → 提醒一次,不重复,也不丢弃义务", () => {
   const s = session("me", [member("peer")]);
   rememberPending(s, { from: "peer", id: "req-1", hops: 1, ref: "payload-原文" });
   s.pendingReplies[0].seen = true;
@@ -175,14 +183,13 @@ test("缺口 2:看到过但没回复 → 提醒一次,带上 re 原文", () => {
   assert.equal(first[0].type, "remind", "应产出提醒");
   assert.deepEqual(first[0].pending, ["peer"]);
   assert.equal(first[0].ref, "payload-原文", "提醒要把原请求带上");
+  assert.equal(first[0].requestId, "req-1", "提醒要带上 request id");
   assert.equal(s.pendingReplies.length, 1, "提醒过还不算回复");
 
-  // 再 settle:已经提醒过,不再重复打扰
+  // 再 settle:已经提醒过,不再重复打扰;义务仍然保留
   const second = onTurnSettled(s);
-  assert.equal(second.length, 1);
-  assert.equal(second[0].type, "card");
-  assert.equal(second[0].kind, "failed", "两次都不回就本机说清楚");
-  assert.match(second[0].reason, /仍未被回复/);
+  assert.deepEqual(second, [], "只提醒一次,不重复打扰");
+  assert.equal(s.pendingReplies.length, 1, "提醒过不等于已回复,义务必须保留");
 });
 
 test("缺口 2:模型还没看到时不提醒 —— 它会被排进下一个 turn", () => {
@@ -203,38 +210,80 @@ test("缺口 2:没有待回复时 settled 不发任何东西", () => {
 
 // ================================================================ 显式回复
 
-test("bindReply:回给有待回复请求的队友 → 带上原来的 re,跳数 +1", () => {
+test("bindRequest:按 request id 找回原发信人,带上 re,跳数 +1", () => {
   const s = session("me", [member("peer")]);
   rememberPending(s, { from: "peer", id: "req-9", hops: 1, ref: "p" });
 
-  const r = bindReply(s, ["peer"]);
-  assert.equal(r.replyTo, "peer");
-  assert.equal(r.re, "req-9", "不带 re 的话对端会当成新请求,两个 agent 会互相触发下去");
+  const r = bindRequest(s, "req-9");
+  assert.equal(r.replyTo, "peer", "目标是存储记录里的原发信人,不靠猜");
+  assert.equal(r.re, "req-9");
   assert.equal(r.hops, 2);
-  assert.equal(s.pendingReplies.length, 0, "回一次就算答完,从队列移除");
+  assert.equal(r.kind, "pending");
+  // bindRequest 不改状态:必须真正发出之后才消费
+  assert.equal(s.pendingReplies.length, 1, "绑定阶段不能提前消费义务");
+
+  assert.equal(consumeRequest(s, "req-9"), "pending");
+  assert.equal(s.pendingReplies.length, 0, "成功发出后才清掉匹配的那一条");
 });
 
-test("bindReply:回给别人 / 群发 → 不绑定", () => {
-  const s = session("me", [member("peer"), member("other")]);
+test("bindRequest:同一队友的多条请求各自独立可回", () => {
+  const s = session("me", [member("peer")]);
+  rememberPending(s, { from: "peer", id: "req-a", hops: 0, ref: "a" });
+  rememberPending(s, { from: "peer", id: "req-b", hops: 0, ref: "b" });
+  assert.equal(pendingForPeer(s, "peer").length, 2, "同一队友两条都要在列");
+
+  const a = bindRequest(s, "req-a");
+  assert.equal(a.re, "req-a");
+  consumeRequest(s, "req-a");
+  assert.equal(s.pendingReplies.length, 1, "只清匹配的那一条");
+  assert.equal(findPendingById(s, "req-b")?.re, "req-b", "另一条原样保留");
+
+  const b = bindRequest(s, "req-b");
+  assert.equal(b.re, "req-b", "第二条仍可单独回复");
+  consumeRequest(s, "req-b");
+  assert.equal(s.pendingReplies.length, 0);
+});
+
+test("bindRequest:未知 / 过期 id 返回 null,不碰任何状态", () => {
+  const s = session("me", [member("peer")]);
   rememberPending(s, { from: "peer", id: "req-9", hops: 0, ref: "p" });
 
-  assert.equal(bindReply(s, ["other"]).re, null, "回给别人不是回复 peer 的请求");
-  assert.equal(bindReply(s, ["peer", "other"]).re, null, "群发不该被当成某一条的回复");
-  assert.equal(s.pendingReplies.length, 1, "没绑上就不该动队列");
+  assert.equal(bindRequest(s, "nope"), null);
+  assert.equal(consumeRequest(s, "nope"), null);
+  assert.equal(s.pendingReplies.length, 1, "未知 id 不能动现有义务");
+
+  // 已经回复过的 id 不能再被当成待回复(消费一次后即成过期)
+  consumeRequest(s, "req-9");
+  assert.equal(bindRequest(s, "req-9"), null, "已回复的 id 是过期 id");
 });
 
-test("bindReply:跳数到上限时封顶,不越界", () => {
+test("bindRequest:跳数到上限时封顶,不越界", () => {
   const s = session("me", [member("peer")]);
   rememberPending(s, { from: "peer", id: "r", hops: MAX_HOPS - 1, ref: "p" });
-  assert.equal(bindReply(s, ["peer"]).hops, MAX_HOPS);
+  assert.equal(bindRequest(s, "r").hops, MAX_HOPS);
 });
 
-test("bindReply:没有待回复时原样返回,不报错", () => {
+test("bindRequest:没有待回复时可回退到未要求回信的入站关联", () => {
   const s = session("me", [member("peer")]);
-  const r = bindReply(s, ["peer"]);
-  assert.equal(r.replyTo, null);
-  assert.equal(r.re, null);
-  assert.equal(r.hops, 0);
+  handleIncoming(s, { from: "peer", id: "note-1", re: null, body: { text: "通知", hops: 1 } });
+
+  const r = bindRequest(s, "note-1");
+  assert.equal(r.replyTo, "peer");
+  assert.equal(r.re, "note-1");
+  assert.equal(r.kind, "optional");
+  assert.equal(r.hops, 2);
+  consumeRequest(s, "note-1");
+  assert.equal(bindRequest(s, "note-1"), null, "关联是一次性的");
+});
+
+test("blockedTargets:列出有未回复请求的人及 request id", () => {
+  const s = session("me", [member("peer"), member("other")]);
+  rememberPending(s, { from: "peer", id: "req-1", hops: 0, ref: "p" });
+  rememberPending(s, { from: "peer", id: "req-2", hops: 0, ref: "p2" });
+
+  const blocked = blockedTargets(s, ["peer", "other"]);
+  assert.deepEqual(blocked, [{ peer: "peer", ids: ["req-1", "req-2"] }]);
+  assert.deepEqual(blockedTargets(s, ["other"]), [], "无关的人不受影响");
 });
 
 test("observeMessage:自定义消息按 customType 认出来并标记 seen", () => {
@@ -373,7 +422,7 @@ test("对话形状:新请求 → 卡片 + 注入 + 设置待回复", () => {
   });
 
   assert.deepEqual(types(actions), ["card", "inject"]);
-  assert.match(actions[1].payload, /\[来自 peer 的 team 消息\]/);
+  assert.match(actions[1].payload, /\[来自 peer 的 team 请求\]/);
   assert.equal(s.pendingReplies.length, 1);
   assert.equal(s.pendingReplies[0].re, "req-x", "re 指向入站消息 id,用于回信时闭合");
   assert.equal(
@@ -439,7 +488,8 @@ test("对话形状:一来一回之后停下来,不会互相触发下去", () => 
     const cls = classifyInbound(receiver, msg.env);
     if (!cls.requireResponse) continue;
 
-    const bound = bindReply(receiver, [receiver === nodes.B ? "A" : "B"]);
+    const bound = bindRequest(receiver, msg.env.id);
+    consumeRequest(receiver, msg.env.id);
     wire.push({
       to: msg.env.from,
       env: {
@@ -550,7 +600,8 @@ test("响应策略:收到要求回信的消息,但本机 reply=off 时不会提�
   observeMessage(s, "custom", actions.find((a) => a.type === "inject").payload, TEAM_MESSAGE_TYPE);
 
   assert.deepEqual(onTurnSettled(s), [], "off 时绝不提醒");
-  assert.equal(s.pendingReplies.length, 0, "off 时清空队列");
+  assert.equal(s.pendingReplies.length, 1, "off 只是不提醒,义务和发送阻断都还在");
+  assert.deepEqual(blockedTargets(s, ["peer"]).map((b) => b.ids), [["req-off"]]);
 });
 
 test("响应策略:不要求回信的消息也记录入站 id,可选回复带 re 且不设提醒", () => {
@@ -558,18 +609,19 @@ test("响应策略:不要求回信的消息也记录入站 id,可选回复带 re
   const actions = handleIncoming(s, { from: "peer", id: "opt-1", re: null, body: { text: "通知", hops: 0 } });
   assert.ok(actions.some((a) => a.type === "inject"), "仍要唤醒模型");
   assert.equal(s.pendingReplies.length, 0, "不设提醒");
+  assert.deepEqual(blockedTargets(s, ["peer"]), [], "通知不阻断发送");
 
-  const r = bindReply(s, ["peer"]);
-  assert.equal(r.replyTo, "peer", "即便没有提醒,回给刚发消息的队友也算回复");
+  const r = bindRequest(s, "opt-1");
+  assert.equal(r.replyTo, "peer", "显式回复未要求回信的消息也要路由到原发信人");
   assert.equal(r.re, "opt-1", "要带上入站 id,对端才认得出是回复而不是新请求");
   assert.equal(r.hops, 1);
   assert.equal(s.pendingReplies.length, 0, "仍然不产生提醒");
 
-  const again = bindReply(s, ["peer"]);
-  assert.equal(again.re, null, "关联是一次性的,消费后不再误绑");
+  consumeRequest(s, "opt-1");
+  assert.equal(bindRequest(s, "opt-1"), null, "关联是一次性的,消费后不再误绑");
 });
 
-test("响应策略:入站关联与待回复相互独立,要求回信的消息优先走提醒通道", () => {
+test("响应策略:入站关联与待回复相互独立,request id 唯一决定归属", () => {
   const s = session("me", [member("peer")]);
   handleIncoming(s, {
     from: "peer",
@@ -577,21 +629,25 @@ test("响应策略:入站关联与待回复相互独立,要求回信的消息优
     re: null,
     body: { text: "请回复", hops: 2, requireResponse: true },
   });
-  const r = bindReply(s, ["peer"]);
+  const r = bindRequest(s, "req-bind");
   assert.equal(r.re, "req-bind");
   assert.equal(r.hops, 3, "跳数在原请求上 +1");
-  assert.equal(s.pendingReplies.length, 0, "回复后队列清空");
-  assert.equal(bindReply(s, ["peer"]).re, null, "同一入站消息不会被复用");
+  assert.equal(r.kind, "pending");
+
+  consumeRequest(s, "req-bind");
+  assert.equal(s.pendingReplies.length, 0, "回复后只清匹配的那一条");
+  assert.equal(bindRequest(s, "req-bind"), null, "同一入站消息不会被复用");
 });
 
-test("响应策略:buildPayload 在不要求回信时明确说无需回信", () => {
-  const want = buildPayload("p", "任务", { kind: "request", requireResponse: true });
-  assert.match(want, /team_send\(\{ to: "p"/, "要求回信时给出回复入口");
+test("响应策略:buildPayload 要求回信时给出 request id 与 team_reply 指令", () => {
+  const want = buildPayload("p", "任务", { kind: "request", requireResponse: true }, "req-1");
+  assert.match(want, /team_reply\(\{ requestId: "req-1"/, "要给出带精确 id 的回复入口");
+  assert.match(want, /\[来自 p 的 team 请求\]/, "要求回信的消息头部标成请求");
   assert.doesNotMatch(want, /没有要求回复/, "要求回信时不该说无需回信");
 
-  const info = buildPayload("p", "通知", { kind: "request", requireResponse: false });
+  const info = buildPayload("p", "通知", { kind: "request", requireResponse: false }, "note-1");
   assert.match(info, /没有要求回复/, "缺省 / 未要求时要明确告诉模型无需回信");
-  assert.match(info, /team_send\(\{ to: "p"/, "仍要给出可选的回复方式");
+  assert.match(info, /team_reply\(\{ requestId: "note-1"/, "仍给出可选的显式回复方式");
 });
 
 test("响应策略:默认不要求回信时,一来一往不产生任何系统级后续(无乒乓)", () => {
@@ -609,8 +665,9 @@ test("响应策略:默认不要求回信时,一来一往不产生任何系统级
 
   // B 可选地回复
   observeMessage(nodes.B, "custom", bInject.payload, TEAM_MESSAGE_TYPE);
-  const bound = bindReply(nodes.B, ["A"]);
+  const bound = bindRequest(nodes.B, sent.id);
   assert.equal(bound.re, sent.id, "可选回复也要闭合到原消息");
+  consumeRequest(nodes.B, sent.id);
   const replyEnv = { from: "B", id: "rep-1", re: bound.re, body: { text: "收到", hops: bound.hops } };
 
   const aActions = handleIncoming(nodes.A, replyEnv);
@@ -644,13 +701,38 @@ test("extractText:字符串与内容数组", () => {
 });
 
 test("buildPayload:请求与回复措辞不同", () => {
-  const req = buildPayload("p", "任务", { kind: "request" });
-  assert.match(req, /【不会】自动回传/, "要明确说回传不是自动的 —— 以前说会,现在不会了");
-  assert.match(req, /team_send\(\{ to: "p"/, "要告诉它具体怎么回复,收件人直接填好");
+  const req = buildPayload("p", "任务", { kind: "request", requireResponse: true }, "req-1");
+  assert.match(req, /【不会】自动回传/, "要明确说回传不是自动的");
+  assert.match(req, /team_reply\(\{ requestId: "req-1"/, "要告诉它用精确 id 显式回复");
 
-  const rep = buildPayload("p", "答复", { kind: "reply", original: "原来的问题" });
-  assert.match(rep, /【不会】自动回传/);
-  assert.match(rep, /原来的问题/);
+  const rep = buildPayload("p", "答复", { kind: "reply" });
+  assert.match(rep, /\[来自 p 的 team 回复\]/);
+  assert.match(rep, /不需要再回复/, "回复不再要求回复,对话才能停");
+});
+
+test("响应策略:reply=mirror 不把任何待回复当成已回复", () => {
+  const s = session("me", [member("peer")], { reply: "mirror", lastText: "本轮输出" });
+  rememberPending(s, { from: "peer", id: "req-m", hops: 0, ref: "p" });
+
+  const actions = onTurnSettled(s);
+  assert.ok(actions.every((a) => a.type === "send" && a.fyi === true), "mirror 只推 fyi");
+  assert.equal(s.pendingReplies.length, 1, "mirror 不能把义务消掉");
+  assert.deepEqual(blockedTargets(s, ["peer"]).map((b) => b.ids), [["req-m"]]);
+});
+
+test("响应策略:send/ask 不再自动关联待回复(回复只能 team_reply)", () => {
+  // send/ask 都是独立的新消息:它们不带 re、不消费任何 pending/关联。
+  // 这样“发给谁就算回复谁”的旧推断彻底消失。
+  const s = session("me", [member("peer")]);
+  rememberPending(s, { from: "peer", id: "req-x", hops: 1, ref: "p" });
+  handleIncoming(s, { from: "peer", id: "note-x", re: null, body: { text: "通知", hops: 0 } });
+
+  // 只有 bindRequest 会拿到 re;待回复/关联都要原封不动。
+  assert.equal(s.pendingReplies.length, 1, "precondition");
+  assert.equal(s.incomingIds.get("peer").id, "note-x", "precondition");
+  assert.equal(bindRequest(s, "req-x").re, "req-x");
+  assert.equal(s.pendingReplies.length, 1, "bindRequest 不改状态");
+  assert.equal(s.incomingIds.get("peer").id, "note-x");
 });
 
 test("excerpt:压缩空白并截断", () => {
