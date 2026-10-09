@@ -803,7 +803,7 @@ export default function (pi: ExtensionAPI) {
       labels.length ? `可用分组:${labels.map((l) => `@${l}`).join(" ")}` : "",
       "",
       "**发送**:默认用 `team_send({ to, text })` —— 送达并唤醒对方,但不要求回信。`to` 可以是节点名、`@label`(分组)、`\"*\"`(全员)、`\"@default\"`(默认组),或数组。",
-      "**要求回信**:需要对方回话时用 `team_ask({ to, text })` —— 对方未回复会被提醒一次。它和所有工具一样立即返回投递回执,不会同步等答案;回信稍后作为一条 team 消息送到。",
+      "**要求回信**:需要对方回话时用 `team_ask({ to, text })` —— 对方未回复会被提醒一次。它和所有工具一样立即返回投递回执,不会同步等答案;回信稍后作为一条 team 消息送到。`team_ask` 永远是一条新请求,不会算作对旧消息的回复;要回复队友请用 `team_send`。",
       "**查成员**:调用 `team_roster()`,或 `team_info({ what: \"peers\" })`。",
       "",
       "**接收**:输入里出现 `[来自 <名字> 的 team 消息]` 前缀时,那是另一个 agent 发来的消息,不是真人打字。",
@@ -850,6 +850,7 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "Use team_ask only when you actually need the peer's answer; each recipient costs a full model turn and an unanswered ask is reminded once.",
       "team_ask returns immediately with a delivery receipt — it does not wait for the answer; the reply arrives later as an injected team message.",
+      "team_ask always starts a NEW request: it is never counted as a reply to an earlier message, even from the same peer. Use team_send to answer a teammate.",
       "A reply never asks for a reply, so conversations still end.",
     ],
     parameters: transmitToolParams(),

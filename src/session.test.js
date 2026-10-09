@@ -584,20 +584,6 @@ test("响应策略:入站关联与待回复相互独立,要求回信的消息优
   assert.equal(bindReply(s, ["peer"]).re, null, "同一入站消息不会被复用");
 });
 
-test("响应策略:显式要求回信的消息不被可选关联吞掉,而是作为新请求发出", () => {
-  const s = session("me", [member("peer")]);
-  handleIncoming(s, { from: "peer", id: "note-1", re: null, body: { text: "通知", hops: 0 } });
-  assert.equal(s.incomingIds.get("peer").id, "note-1", "前置条件:已有关联");
-
-  // requireResponse=true 说明这是**新请求**,不能静默绑成对旧通知的回复,
-  // 否则 requireResponse 会被归零、对端就不会被提醒。
-  const r = bindReply(s, ["peer"], { allowAssociation: false });
-  assert.deepEqual(r, { replyTo: null, re: null, hops: 0 }, "要求回信时应当作新请求");
-
-  // 关联仍在,留给真正的可选回复
-  assert.equal(bindReply(s, ["peer"]).re, "note-1");
-});
-
 test("响应策略:buildPayload 在不要求回信时明确说无需回信", () => {
   const want = buildPayload("p", "任务", { kind: "request", requireResponse: true });
   assert.match(want, /team_send\(\{ to: "p"/, "要求回信时给出回复入口");

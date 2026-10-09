@@ -62,6 +62,7 @@ export function createBrokerTransport() {
     },
     emit(ev, ...a) { for (const h of handlers.get(ev) ?? []) h(...a); },
     start(self) {
+      globalThis.__piTeamHarness.transport = tr;
       tr.emit("state", "online");
       tr.emit("membership", [
         { name: self.name, host: null, addr: null, labels: [], since: 0 },
@@ -279,4 +280,26 @@ test("menu:发消息的向导也能选 ask,并真的走 ask", { skip: SKIP }, as
   assert.equal(harness.sent.length, 1, "菜单应投递一次");
   assert.equal(harness.sent[0].body.requireResponse, true, "菜单里选了 ask,信封就要带 requireResponse");
   assert.equal(harness.sent[0].body.text, "菜单发的询问");
+});
+
+test("tool:对端有待回复时 team_ask 仍发新请求,不消费它 —— 之后 team_send 仍能回复原请求", { skip: SKIP }, async () => {
+  const { tools, ctx } = await build();
+  const tr = harness.transport;
+  assert.ok(tr && typeof tr.emit === "function", "前置:假 transport 已挂上,能注入入站消息");
+
+  harness.sent.length = 0;
+  // 对端发来一条要求回信的消息 → 本机建立对 peer 的待回复。
+  tr.emit("envelope", { from: "peer", id: "peer-req-ask", re: null, body: { text: "请回复", hops: 0, requireResponse: true } });
+
+  const askRes = await tools.get("team_ask").execute("k1", { to: "peer", text: "我的新请求" }, undefined, undefined, ctx);
+  assert.equal(askRes.details.delivered, true);
+  assert.equal(harness.sent[0].body.requireResponse, true, "team_ask 要求回信");
+  assert.equal(harness.sent[0].re, null, "team_ask 是新请求,不能带上对方请求的 id");
+  assert.equal(harness.sent[0].body.hops, 0, "team_ask 跳数从 0 开始");
+
+  // 待回复没有被 ask 消费,所以随后的 team_send 仍能关联到它。
+  const sendRes = await tools.get("team_send").execute("k2", { to: "peer", text: "回复原请求" }, undefined, undefined, ctx);
+  assert.equal(sendRes.details.delivered, true);
+  assert.equal("requireResponse" in harness.sent[1].body, false, "回复(send)不要求回信");
+  assert.equal(harness.sent[1].re, "peer-req-ask", "原待回复未被 ask 消费,team_send 仍能关联");
 });

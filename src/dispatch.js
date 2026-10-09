@@ -628,16 +628,22 @@ export function doTransmit(to, text, origin, local, state, env, opts = {}) {
   // 记下 origin:对方回复时靠它判断"模型知道这回事吗"
   state.outbound.set(id, { text, origin, to });
 
-  // 发给一个正有待回复请求的队友 → 认成对那条请求的回复。
-  // 带上 re,对端才知道这是回复、不该再自动回信;不带的话两个 agent
-  // 会互相触发下去,只能靠跳数上限兜住。
-  // 显式要求回信的消息不会被"可选关联"吞掉:它是一条新请求,只走待回复通道。
+  // ── 关联:只有普通 send 才走 ──
+  // 发给一个正有待回复请求的队友 → 认成对那条请求的回复,带上 re、跳数 +1。
+  // 不带 re 的话对端会当成新请求,两个 agent 会互相触发下去,只能靠跳数
+  // 上限兜住。所以"回复"是 send 的显式语义。
+  //
+  // team_ask(requireResponse=true)永远是**一条新请求**:直接跳过 bindReply,
+  // re 为空、跳数从 0 开始,也**不消费**对方留下的 pendingReplies /
+  // incomingIds —— 消费掉的话本机之后想回原请求就没得关联了,而且
+  // requireResponse 会被归零,team_ask 静默变成一条普通回复(实测过的错误语义)。
   const wantsReply = opts.requireResponse === true;
-  const { replyTo, re, hops } = bindReply(state, local.targets, { allowAssociation: !wantsReply });
+  const { replyTo, re, hops } = wantsReply
+    ? { replyTo: null, re: null, hops: 0 }
+    : bindReply(state, local.targets);
 
-  // 回复永远不要求回信:它带着 re,对端会按"回复"处理。把标志归零,
-  // 让信封本身就说真话,不依赖对端的优先级判断来兜底。
-  const requireResponse = replyTo ? false : wantsReply;
+  // 只有 send 可能被认成回复并带 re;ask 永远是要求回信的新请求。
+  const requireResponse = wantsReply;
 
   const lines = [
     t(M.dispatch.sendSent, { to: formatTarget(to), count: local.targets.length }),

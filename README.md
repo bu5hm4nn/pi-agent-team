@@ -205,8 +205,10 @@ chosen by which tool (or command) sends it, not by a flag:
 Both return a delivery receipt immediately; `team_ask` does **not** wait for the
 answer — the reply arrives later as a team message. A reply never asks for a
 reply, even when it was sent to a peer you had asked: it is bound to the message
-it answers, so conversations still end. On the receiving side, `reply=off` still
-suppresses the reminder entirely.
+it answers, so conversations still end. A `team_ask` is always a new request —
+it is never counted as an answer to an earlier message, even one from the same
+peer — so answering a teammate is always `team_send`. On the receiving side,
+`reply=off` still suppresses the reminder entirely.
 
 The receiving agent is always woken either way — `team_ask` controls whether an
 answer is *expected*, not whether the message is delivered.

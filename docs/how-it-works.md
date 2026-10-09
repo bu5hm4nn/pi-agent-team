@@ -88,6 +88,12 @@ and a reminder. A reply never asks for a reply even when the envelope carries
 the flag — `re` wins — which is the other half of why a conversation
 terminates.
 
+An `ask` is always a new request. Even when you still owe that peer an answer
+to an earlier request, `team_ask` is never bound to it: its `re` stays empty and
+that pending request (and any optional association) is left untouched, so a
+later `team_send` can still answer it. Answering a teammate is always
+`team_send`; `team_ask` only starts new threads.
+
 ### Delivery, and why not `followUp`
 
 A teammate's message arrives as a custom message (`pi.sendMessage`), not as a

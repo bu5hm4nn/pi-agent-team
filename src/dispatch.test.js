@@ -824,17 +824,67 @@ test("ask:群发确认 party 携带 requireResponse=true,确认后 doTransmit �
   assert.equal(after.intentions.find((i) => i.type === "send").requireResponse, true, "确认后 ask 不能退化成 send");
 });
 
-test("ask:要求回信的消息不会被入站关联吞掉(作为新请求发出)", async () => {
+test("ask:对端有待回复时仍作为新请求发出,不消费它的待回复(re=null / hops=0 / 要求回信)", async () => {
+  const { rememberPending } = await import("./session.js");
+  const c = setup();
+  // 前置:peer 之前发来一条要求回信的消息 → 本机有它的待回复
+  rememberPending(c.state, { from: "peer", id: "peer-req-1", hops: 2, ref: "peer 的请求" });
+  assert.equal(c.state.pendingReplies.length, 1, "前置条件:peer 有待回复请求");
+
+  const r = dispatch({ sub: "ask", args: ["peer", "我的新请求"], origin: "model" }, c.state, c.env);
+  const send = r.intentions.find((i) => i.type === "send");
+  assert.equal(send.requireResponse, true, "team_ask 永远要求回信,不能被归零");
+  assert.equal(send.re, null, "team_ask 不是回复,不能带上对方请求的 id");
+  assert.equal(send.hops, 0, "team_ask 是新请求,跳数从 0 开始");
+  assert.equal(c.state.pendingReplies.length, 1, "不能消费掉对方原来的待回复");
+  assert.equal(c.state.pendingReplies[0].re, "peer-req-1", "原待回复必须原样保留");
+});
+
+test("ask 之后,普通 send 仍能作为对原请求的回复(关联不被抢走)", async () => {
+  const { rememberPending } = await import("./session.js");
+  const c = setup();
+  rememberPending(c.state, { from: "peer", id: "peer-req-1", hops: 2, ref: "peer 的请求" });
+
+  // 先发一条新请求,再回原请求 —— 互不干扰。
+  dispatch({ sub: "ask", args: ["peer", "顺带问一句"], origin: "model" }, c.state, c.env);
+
+  const r = dispatch({ sub: "send", args: ["peer", "这是给 peer-req-1 的回复"], origin: "model" }, c.state, c.env);
+  const send = r.intentions.find((i) => i.type === "send");
+  assert.equal(send.re, "peer-req-1", "普通 send 保留原有的关联能力");
+  assert.equal(send.hops, 3, "跳数在原请求上 +1");
+  assert.equal(send.requireResponse, false, "回复不要求回信");
+  assert.equal(c.state.pendingReplies.length, 0, "回复后待回复清空");
+  assert.ok(r.lines.some((l) => /作为对 peer/.test(l)), "要让用户/模型知道这次发送被认成了回复");
+});
+
+test("ask:也不消费可选入站关联(incomingIds);普通 send 仍能闭合到它", async () => {
   const { handleIncoming } = await import("./session.js");
   const c = setup();
   // peer 之前发过一条不要求回信的通知 → 存在可选关联
   handleIncoming(c.state, { from: "peer", id: "note-1", re: null, body: { text: "通知", hops: 0 } });
-  assert.equal(c.state.incomingIds.get("peer").id, "note-1");
+  assert.equal(c.state.incomingIds.get("peer").id, "note-1", "前置条件:已有关联");
 
-  const r = dispatch({ sub: "ask", args: ["peer", "新请求"], origin: "model" }, c.state, c.env);
+  const ask = dispatch({ sub: "ask", args: ["peer", "新问题"], origin: "model" }, c.state, c.env);
+  const askSend = ask.intentions.find((i) => i.type === "send");
+  assert.equal(askSend.re, null, "team_ask 不绑定入站关联");
+  assert.equal(askSend.requireResponse, true, "要求回信不能被归零");
+  assert.equal(c.state.incomingIds.get("peer").id, "note-1", "ask 不消费入站关联");
+
+  const rep = dispatch({ sub: "send", args: ["peer", "回答通知"], origin: "model" }, c.state, c.env);
+  assert.equal(rep.intentions.find((i) => i.type === "send").re, "note-1", "普通 send 仍闭合到可选关联");
+});
+
+test("ask:命令路径同样不被待回复吞掉(/team ask)", async () => {
+  const { rememberPending } = await import("./session.js");
+  const c = setup();
+  rememberPending(c.state, { from: "peer", id: "cmd-req", hops: 1, ref: "peer 的请求" });
+
+  const r = run("ask", ["peer", "命令侧的新请求"], c);
   const send = r.intentions.find((i) => i.type === "send");
-  assert.equal(send.re, null, "要求回信是新请求,不能被绑成对旧通知的回复");
-  assert.equal(send.requireResponse, true, "要求回信不能被归零");
+  assert.equal(send.requireResponse, true);
+  assert.equal(send.re, null);
+  assert.equal(send.hops, 0);
+  assert.equal(c.state.pendingReplies.length, 1, "命令路径也不能消费待回复");
 });
 
 // ---------------------------------------------------------------- 消息体积
