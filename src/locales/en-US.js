@@ -57,6 +57,7 @@ export const enUS = Object.freeze({
   "tool.moreLines_other": "…{count} more lines",
   "tool.cardMoreLines_one": "…{count} more line (expand to view)",
   "tool.cardMoreLines_other": "…{count} more lines (expand to view)",
+  "tool.requireResponse": "(needs reply)",
   "tool.notConnected": "Not connected; the message was not sent",
   "tool.delivered": "✓ delivered to {to}",
   "tool.noPeers": "(no other nodes)",
@@ -156,7 +157,7 @@ export const enUS = Object.freeze({
   "dispatch.label.reconnect": "(labels changed; reconnecting to the broker)",
   "dispatch.label.usage": "Usage: /team label [list|add <name...>|remove <name...>]",
 
-  "dispatch.send.usage": "Usage: /team send <name|@group|*|@default|a,b> <message>",
+  "dispatch.send.usage": "Usage: /team send [--require-response] <name|@group|*|@default|a,b> <message>",
   "dispatch.send.noMatch": "No matching recipients ({targets})",
   "dispatch.send.noPeers": "No other nodes online",
   "dispatch.send.bulk_one": "About to send to {count} node: {targets}",
@@ -166,6 +167,7 @@ export const enUS = Object.freeze({
   "dispatch.send.sent_one": "Sent to {to} ({count} node)",
   "dispatch.send.sent_other": "Sent to {to} ({count} nodes)",
   "dispatch.send.asReply": "(as a reply to the request {id})",
+  "dispatch.send.awaitReply": "(asked the recipient to reply)",
 
   "dispatch.target.all": "everyone",
   "dispatch.target.default": "default group",
@@ -354,6 +356,7 @@ export const enUS = Object.freeze({
   "ui.acAll": "everyone",
   "ui.acGroup": "group",
   "ui.acKnownConfig": "already configured on this machine",
+  "ui.acRequireResponse": "ask the recipient to reply (default: off)",
   "ui.acNodeName": "this node's name (this run only)",
   "ui.acLabels": "labels, comma-separated",
   "ui.acPunch": "join with a punch:// URI (a single URI is all you need)",

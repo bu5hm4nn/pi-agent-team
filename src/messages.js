@@ -62,6 +62,7 @@ const status = Object.freeze({
 const tool = Object.freeze({
   moreLines: "tool.moreLines",
   cardMoreLines: "tool.cardMoreLines",
+  requireResponse: "tool.requireResponse",
   notConnected: "tool.notConnected",
   delivered: "tool.delivered",
   noPeers: "tool.noPeers",
@@ -174,6 +175,7 @@ const dispatch = Object.freeze({
   sendNotConnected: "dispatch.send.notConnected",
   sendSent: "dispatch.send.sent",
   sendAsReply: "dispatch.send.asReply",
+  sendAwaitReply: "dispatch.send.awaitReply",
 
   targetAll: "dispatch.target.all",
   targetDefault: "dispatch.target.default",
@@ -350,6 +352,7 @@ const ui = Object.freeze({
   acAll: "ui.acAll",
   acGroup: "ui.acGroup",
   acKnownConfig: "ui.acKnownConfig",
+  acRequireResponse: "ui.acRequireResponse",
   acNodeName: "ui.acNodeName",
   acLabels: "ui.acLabels",
 });

@@ -796,6 +796,95 @@ test("send:没有待回复时照常作为新消息发出", () => {
   assert.equal(send.hops, 0);
 });
 
+// ---------------------------------------------------------------- 响应策略(requireResponse)
+
+test("send:默认不要求回信;--require-response 打开要求且不偷走正文", () => {
+  const c = setup();
+  const plain = run("send", ["peer", "hi"], c);
+  assert.equal(plain.intentions.find((i) => i.type === "send").requireResponse, false, "缺省就是不要求回信");
+
+  const c2 = setup();
+  const r = run("send", ["--require-response", "peer", "帮我", "跑测试"], c2);
+  assert.equal(r.ok, true, r.error);
+  const send = r.intentions.find((i) => i.type === "send");
+  assert.equal(send.requireResponse, true);
+  assert.equal(send.to, "peer");
+  assert.equal(send.text, "帮我 跑测试", "flag 不能被当成正文,也不能吞掉正文");
+  assert.ok(r.lines.some((l) => /已要求对方回信/.test(l)), `要让用户知道已要求回信:${r.lines}`);
+});
+
+test("send:--require-response 只在前缀被识别,正文里的同名 token 原样保留", () => {
+  const c = setup();
+  const r = run("send", ["peer", "--require-response"], c);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.intentions.find((i) => i.type === "send").text, "--require-response", "不能偷走正文");
+  assert.equal(r.intentions.find((i) => i.type === "send").requireResponse, false);
+});
+
+test("send:工具路径 requireResponse 布尔值原样进入 send 意图(显式 false 不丢失)", () => {
+  const cTrue = setup();
+  const rTrue = dispatch({ sub: "send", args: ["peer", "x"], origin: "model", requireResponse: true }, cTrue.state, cTrue.env);
+  assert.equal(rTrue.intentions.find((i) => i.type === "send").requireResponse, true);
+
+  const cFalse = setup();
+  const rFalse = dispatch({ sub: "send", args: ["peer", "x"], origin: "model", requireResponse: false }, cFalse.state, cFalse.env);
+  assert.equal(
+    rFalse.intentions.find((i) => i.type === "send").requireResponse,
+    false,
+    "显式 false 必须保留成 boolean,不能被当成缺省真值或被丢掉",
+  );
+});
+
+test("send:双入口一致 —— 命令 flag 与工具布尔产生相同的 send 意图", () => {
+  const viaCommand = run("send", ["--require-response", "peer", "x"], setup());
+  const toolCtx = setup();
+  const viaTool = dispatch(
+    { sub: "send", args: ["peer", "x"], origin: "user", requireResponse: true },
+    toolCtx.state,
+    toolCtx.env,
+  );
+  assert.equal(
+    viaCommand.intentions.find((i) => i.type === "send").requireResponse,
+    viaTool.intentions.find((i) => i.type === "send").requireResponse,
+  );
+});
+
+test("send:群发确认 party 携带 requireResponse,确认后 doSend 仍带上", () => {
+  const peers = Array.from({ length: BULK_WARN_THRESHOLD + 1 }, (_, i) => member(`p${i}`));
+  const c = setup({ peers });
+  const r = sendMessage("@default", "hi", "model", c.state, c.env, { requireResponse: true });
+  assert.equal(r.party.kind, "confirmBulk");
+  assert.equal(r.party.requireResponse, true, "确认数据必须带着标志,否则确认后就丢了");
+  assert.deepEqual(r.intentions, [], "确认前不直接发送");
+
+  const local = { targets: peers.map((p) => p.name), unknown: [] };
+  const after = doSend(r.party.to, r.party.text, r.party.origin, local, c.state, c.env, {
+    requireResponse: r.party.requireResponse,
+  });
+  assert.equal(after.intentions.find((i) => i.type === "send").requireResponse, true);
+});
+
+test("send:默认群发确认 party 的 requireResponse 是 false,不会莫名变成要求回信", () => {
+  const peers = Array.from({ length: BULK_WARN_THRESHOLD + 1 }, (_, i) => member(`p${i}`));
+  const c = setup({ peers });
+  const r = sendMessage("@default", "hi", "user", c.state, c.env);
+  assert.equal(r.party.kind, "confirmBulk");
+  assert.equal(r.party.requireResponse, false);
+});
+
+test("send:要求回信的消息不会被入站关联吞掉(作为新请求发出)", async () => {
+  const { handleIncoming } = await import("./session.js");
+  const c = setup();
+  // peer 之前发过一条不要求回信的通知 → 存在可选关联
+  handleIncoming(c.state, { from: "peer", id: "note-1", re: null, body: { text: "通知", hops: 0 } });
+  assert.equal(c.state.incomingIds.get("peer").id, "note-1");
+
+  const r = dispatch({ sub: "send", args: ["peer", "新请求"], origin: "model", requireResponse: true }, c.state, c.env);
+  const send = r.intentions.find((i) => i.type === "send");
+  assert.equal(send.re, null, "要求回信是新请求,不能被绑成对旧通知的回复");
+  assert.equal(send.requireResponse, true, "要求回信不能被归零");
+});
+
 // ---------------------------------------------------------------- 消息体积
 
 test("oversizeBy:正常文本不报,超限才报", async () => {

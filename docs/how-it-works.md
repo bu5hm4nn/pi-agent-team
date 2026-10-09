@@ -63,8 +63,11 @@ status` says so rather than pretending otherwise.
 ## Message shapes
 
 ```
-A → B   request   (no re)
-          B's model sees it and answers with team_send
+A → B   request   (no re, no requireResponse)
+          B's model sees it and is woken; no answer is expected
+
+A → B   request   (no re, requireResponse: true)
+          B's model sees it and is asked to answer; reminded once if it does not
 
 B → A   reply     (re = A's request id)
           A's model sees it. Nothing is sent back, so the exchange ends.
@@ -74,11 +77,19 @@ Rules, covered by tests:
 
 | Inbound | Action |
 |---|---|
-| Request (`re` empty) | Deliver into the model's context; reply expected |
+| Request without `requireResponse` (default) | Deliver and wake the model; **no reply expected**, no reminder |
+| Request with `requireResponse: true` | Deliver and wake the model; reply expected, reminded once if unanswered |
 | Reply to something the **model** sent | Deliver, with the original quoted; no reply expected |
 | Reply to something **you** sent via `/team send` | Card only — the model never saw your message, so waking it would confuse it |
 | Reply whose original is unknown (e.g. after a restart) | Deliver; no reply expected |
 | `fyi` broadcast (`reply=mirror`) | Card only |
+
+`requireResponse` lives on the message, not in the config, and defaults to
+false: an ordinary `team_send` delivers and wakes the peer but does not ask for
+an answer. Only `requireResponse: true` (or `/team send --require-response`)
+creates a pending request and a reminder. A reply never asks for a reply even
+when the flag is set — `re` wins — which is the other half of why a conversation
+terminates.
 
 ### Delivery, and why not `followUp`
 
@@ -133,6 +144,9 @@ unanswered requests and reminds once. `bindReply` links an explicit reply to the
 pending request automatically, carrying its `re` and incrementing `hops` — a
 reply sent without `re` would look like a new request to the other side, and the
 two agents would keep triggering each other until the hop limit stopped them.
+When a message did **not** ask for a reply there is no pending entry, so a
+separate, reminder-free association records the incoming id; replying to it still
+carries the right `re` (and is consumed once), but no reminder is ever created.
 
 Messages carry a hop count and stop at 4. That is a backstop, not the mechanism —
 the shape above is what actually terminates a conversation.
@@ -185,6 +199,9 @@ TEAM_LABELS=web \
 
 **`team_*` tools** — for the model and automation: `team_join`, `team_info`,
 `team_roster`, `team_send`, `team_label`, `team_leave`.
+
+`team_send` takes an optional `requireResponse` boolean (default `false`);
+`/team send --require-response` is the same switch from the command line.
 
 ### What gets saved, and what does not
 
