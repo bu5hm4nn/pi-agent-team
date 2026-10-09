@@ -21,6 +21,7 @@ export const enUS = Object.freeze({
   "notify.files_one": "{count} file",
   "notify.files_other": "{count} files",
   "notify.sendFailed": "team: not connected, the message was not sent",
+  "notify.sendError": "team: sending failed — {reason}",
   "notify.injectFailed": "team: failed to add the message to the model context: {reason}",
   "notify.remindFailed": "team: reminder failed: {reason}",
   "notify.cancelled": "Canceled",
@@ -55,8 +56,10 @@ export const enUS = Object.freeze({
   "tool.moreLines_other": "…{count} more lines",
   "tool.cardMoreLines_one": "…{count} more line (expand to view)",
   "tool.cardMoreLines_other": "…{count} more lines (expand to view)",
+  "tool.requireResponse": "(needs reply)",
   "tool.notConnected": "Not connected; the message was not sent",
   "tool.delivered": "✓ delivered to {to}",
+  "tool.replied": "✓ replied to {id}",
   "tool.noPeers": "(no other nodes)",
   "tool.currentTeam": "(current)",
 
@@ -147,7 +150,7 @@ export const enUS = Object.freeze({
   "dispatch.label.reconnect": "(labels changed; reconnecting to the broker)",
   "dispatch.label.usage": "Usage: /team label [list|add <name...>|remove <name...>]",
 
-  "dispatch.send.usage": "Usage: /team send <name|@group|*|@default|a,b> <message>",
+  "dispatch.send.usage": "Usage: /team {sub} <name|@group|*|@default|a,b> <message>",
   "dispatch.send.noMatch": "No matching recipients ({targets})",
   "dispatch.send.noPeers": "No other nodes online",
   "dispatch.send.bulk_one": "About to send to {count} node: {targets}",
@@ -157,6 +160,12 @@ export const enUS = Object.freeze({
   "dispatch.send.sent_one": "Sent to {to} ({count} node)",
   "dispatch.send.sent_other": "Sent to {to} ({count} nodes)",
   "dispatch.send.asReply": "(as a reply to the request {id})",
+  "dispatch.send.awaitReply": "(asked the recipient to reply)",
+  "dispatch.send.blocked": "Cannot send while a reply is pending: {requests}. Use team_reply to answer first.",
+
+  "dispatch.explicitReply.usage": "Usage: /team reply <requestId> <message>. The requestId is in the injected [team request] message. The reply strategy is now /team replies <off|remind|mirror>.",
+  "dispatch.explicitReply.unknown": "No pending request \"{id}\" to reply to (unknown, already answered, or stale). Nothing was sent.",
+  "dispatch.explicitReply.sent": "(replied to {id})",
 
   "dispatch.target.all": "everyone",
   "dispatch.target.default": "default group",
@@ -172,6 +181,7 @@ export const enUS = Object.freeze({
   "dispatch.reply.noteMirror": "Mirrors every turn's output to all nodes (fyi, does not wake the peer)",
   "dispatch.reply.set": "reply={mode}",
   "dispatch.reply.legacy": "(the old name \"{old}\" still works, but it is now called \"{mode}\")",
+  "dispatch.reply.movedHint": "(the reply strategy moved: use /team replies <off|remind|mirror>)",
 
   "session.noMatch": "No matching recipients ({targets})",
   "session.noPeers": "No other nodes online",
@@ -246,7 +256,7 @@ export const enUS = Object.freeze({
   "command.team": "Pi Agent Team: status / members / messaging / team management / labels",
 
   "tool.sendFailed": "Send failed: {error}",
-  "tool.receipt": "{summary}. The receipt only means the peer's socket received it, not that the peer has finished processing it.",
+  "tool.receipt": "{summary}. The receipt only means the local transport accepted it, not that the peer received or processed it.",
   "tool.failed": "Failed: {error}",
 
   "ui.confirmBulkTitle_one": "Broadcast to {count} node?",
@@ -281,6 +291,9 @@ export const enUS = Object.freeze({
   "ui.selectSendWho": "Send to whom?",
   "ui.inputSendTo": "Send to {name}",
   "ui.placeholderMessage": "Message text",
+  "ui.selectMessageKind": "How should this be sent?",
+  "ui.messageKindSend": "send — informational; the peer is woken but no reply is requested",
+  "ui.messageKindAsk": "ask — request a reply; the peer is reminded once if it stays silent",
 
   "ui.broadcastDefault_one": "@default — default group ({count} node)",
   "ui.broadcastDefault_other": "@default — default group ({count} nodes)",
@@ -313,6 +326,13 @@ export const enUS = Object.freeze({
   "ui.replyOff": "off — no reminder; whether to reply is the model's decision",
   "ui.replyRemind": "remind — reminds once when a request goes unanswered",
   "ui.replyMirror": "mirror — broadcasts every turn's output to all nodes (enabling it on both sides floods both with repeated messages)",
+
+  "ui.menuReplyPending_one": "↩️ Reply to a pending request  ({count})",
+  "ui.menuReplyPending_other": "↩️ Reply to a pending request  ({count})",
+  "ui.selectReplyPending": "Reply to which request?",
+  "ui.inputReplyText": "Reply to {peer}",
+  "ui.replyPendingNone": "No pending requests to reply to",
+  "ui.acPendingFrom": "pending request from {peer}",
 
   "ui.acDefaultGroup": "default group (everyone)",
   "ui.acAll": "everyone",

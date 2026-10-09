@@ -20,6 +20,7 @@ const notify = Object.freeze({
   greeting: "notify.greeting",
   files: "notify.files",
   sendFailed: "notify.sendFailed",
+  sendError: "notify.sendError",
   injectFailed: "notify.injectFailed",
   remindFailed: "notify.remindFailed",
   cancelled: "notify.cancelled",
@@ -60,8 +61,10 @@ const status = Object.freeze({
 const tool = Object.freeze({
   moreLines: "tool.moreLines",
   cardMoreLines: "tool.cardMoreLines",
+  requireResponse: "tool.requireResponse",
   notConnected: "tool.notConnected",
   delivered: "tool.delivered",
+  replied: "tool.replied",
   noPeers: "tool.noPeers",
   currentTeam: "tool.currentTeam",
   // 工具 execute() 的返回文字。它同时进 UI 和模型上下文,但按 story 18
@@ -165,6 +168,12 @@ const dispatch = Object.freeze({
   sendNotConnected: "dispatch.send.notConnected",
   sendSent: "dispatch.send.sent",
   sendAsReply: "dispatch.send.asReply",
+  sendAwaitReply: "dispatch.send.awaitReply",
+  sendBlocked: "dispatch.send.blocked",
+
+  explicitReplyUsage: "dispatch.explicitReply.usage",
+  explicitReplyUnknown: "dispatch.explicitReply.unknown",
+  explicitReplySent: "dispatch.explicitReply.sent",
 
   targetAll: "dispatch.target.all",
   targetDefault: "dispatch.target.default",
@@ -180,6 +189,7 @@ const dispatch = Object.freeze({
   replyNoteMirror: "dispatch.reply.noteMirror",
   replySet: "dispatch.reply.set",
   replyLegacy: "dispatch.reply.legacy",
+  replyMovedHint: "dispatch.reply.movedHint",
 });
 
 const session = Object.freeze({
@@ -285,6 +295,9 @@ const ui = Object.freeze({
   selectSendWho: "ui.selectSendWho",
   inputSendTo: "ui.inputSendTo",
   placeholderMessage: "ui.placeholderMessage",
+  selectMessageKind: "ui.selectMessageKind",
+  messageKindSend: "ui.messageKindSend",
+  messageKindAsk: "ui.messageKindAsk",
 
   broadcastDefault: "ui.broadcastDefault",
   broadcastAll: "ui.broadcastAll",
@@ -314,6 +327,12 @@ const ui = Object.freeze({
   replyOff: "ui.replyOff",
   replyRemind: "ui.replyRemind",
   replyMirror: "ui.replyMirror",
+
+  menuReplyPending: "ui.menuReplyPending",
+  selectReplyPending: "ui.selectReplyPending",
+  inputReplyText: "ui.inputReplyText",
+  replyPendingNone: "ui.replyPendingNone",
+  acPendingFrom: "ui.acPendingFrom",
 
   acDefaultGroup: "ui.acDefaultGroup",
   acAll: "ui.acAll",

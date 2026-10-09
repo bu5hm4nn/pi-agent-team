@@ -14,7 +14,8 @@
  */
 
 import {
-  bindReply,
+  bindRequest,
+  blockedTargets,
   knownLabels,
   others as othersOf,
   parseRecipients,
@@ -78,7 +79,9 @@ const newId = () => `m-${Date.now().toString(36)}-${PROC_TAG}-${(idSeq++).toStri
 /**
  * 主分发。
  *
- * @param {{ sub: string, args: string[] }} input
+ * @param {{ sub: string, args: string[], origin?: "user"|"model" }} input
+ *   子命令 send / ask 共用同一条发送路径;origin 区分人发的(/team)与
+ *   模型发的(team_send / team_ask)。
  * @param {import("./session.js").SessionState} state  读写:只改 reply / selfLabels / outbound
  * @param {{ connState: string, team: string|null, config: {url,token,labels?}|null, host?: string }} env
  * @returns {Result}
@@ -111,12 +114,22 @@ export function dispatch(input, state, env) {
 
     case "send":
     case "say":
-      return sendResult(args, state, env, input);
+      return transmitResult(args, state, env, "send", input.origin);
 
-    // reply 是现在的名字;announce 保留为别名,免得已有的肌肉记忆失效
+    // ask 是同一条发送路径,只是信封上带 requireResponse: 对方会被要求
+    // 回信,未回复时提醒一次。send 不带标志 —— 送达并唤醒,但不要求回复。
+    case "ask":
+      return transmitResult(args, state, env, "ask", input.origin);
+
+    // reply 现在是**显式回复**(按 request id)。它不再兼做提醒策略 ——
+    // 策略搬到 /team replies,旧写法 /team reply <mode> 仍兼容。
     case "reply":
+      return replySubcommand(args, state, env, input.origin);
+
+    // replies(以及旧名字 announce)才是回信策略。
+    case "replies":
     case "announce":
-      return replyResult(args, state, sub);
+      return replyPolicyResult(args, state, sub);
 
     case "on":
       state.reply = "remind";
@@ -521,27 +534,38 @@ function labelResult(args, state, env) {
   return bad(t(M.dispatch.labelUsage));
 }
 
-// ---------------------------------------------------------------- send
+// ---------------------------------------------------------------- send / ask
 
-function sendResult(args, state, env, input = {}) {
+function transmitResult(args, state, env, sub, origin) {
   const rawTo = args[0];
   const text = args.slice(1).join(" ");
-  if (!rawTo || !text) return bad(t(M.dispatch.sendUsage));
+  if (!rawTo || !text) return bad(t(M.dispatch.sendUsage, { sub }));
 
   // origin 以前写死成 "user",连 team_send 工具也是 —— 于是模型发出的消息
   // 被记成人发的,对方回复时只显示卡片,模型永远看不到那条回复。
   // 工具路径在 index.ts 里传 origin:"model"。
-  const origin = input.origin === "model" ? "model" : "user";
-  return sendMessage(rawTo, text, origin, state, env);
+  const sender = origin === "model" ? "model" : "user";
+  return transmit(rawTo, text, sender, state, env, { requireResponse: sub === "ask" });
 }
 
 /**
- * 发送的实际执行 —— command 和 tool 共用这一条路径。
+ * 发送的实际执行 —— command 和 tool(team_send / team_ask)共用这一条路径。
  *
  * 群发超过阈值时不直接发,返回 confirmBulk 让上层决定怎么问:
  * 命令走 confirm 对话框,工具走结构化返回让模型自己判断。
+ *
+ * ── 有待回复的人不能被发送绕过 ──
+ * send/ask 都要在发出**之前**检查整组收件人:谁还有未回复的请求,
+ * 就拒绝整次发送(没有部分发送),让它先用 team_reply。这是为了让
+ * 「新消息」不会把对方的请求无声地晾在一边 —— 义务还在,却没人回。
+ * 与待回复者无关的节点不受影响。
+ *
+ * requireResponse 与 targets 必须跟着 party 一起返回,否则用户确认后
+ * 那一步会丢标志/丢收件人 —— 确认后的 doTransmit 拿不到它们,
+ * ask 会静默退化成 send,阻断也无法在对话期间重新校验。
  */
-export function sendMessage(rawTo, text, origin, state, env) {
+export function transmit(rawTo, text, origin, state, env, opts = {}) {
+  const requireResponse = opts.requireResponse === true;
   const to = parseRecipients(rawTo);
   const local = resolveLocal(state, to);
 
@@ -552,6 +576,10 @@ export function sendMessage(rawTo, text, origin, state, env) {
         : t(M.dispatch.sendNoPeers),
     );
   }
+
+  // 整组校验,原子拒绝:组内任何一人有待回复,就一次都不发。
+  const blocked = blockedTargets(state, local.targets);
+  if (blocked.length) return bad(blockedMessage(blocked));
 
   const isBulk =
     to === "*" || to === "@default" || Array.isArray(to) || (typeof to === "string" && to.startsWith("@"));
@@ -564,12 +592,26 @@ export function sendMessage(rawTo, text, origin, state, env) {
         }),
       ],
       {
-        party: { kind: "confirmBulk", n: local.targets.length, to, text, origin },
+        party: {
+          kind: "confirmBulk",
+          n: local.targets.length,
+          to,
+          text,
+          origin,
+          requireResponse,
+          targets: local.targets,
+        },
       },
     );
   }
 
-  return doSend(to, text, origin, local, state, env);
+  return doTransmit(to, text, origin, local, state, env, { requireResponse });
+}
+
+/** 阻断错误:列出 pending 的 request id 和对应队友,并指明先 team_reply。 */
+function blockedMessage(blocked) {
+  const requests = blocked.map((b) => `${b.ids.join(",")}(${b.peer})`).join("; ");
+  return t(M.dispatch.sendBlocked, { requests });
 }
 
 /**
@@ -598,7 +640,29 @@ export function oversizeBy(text) {
   return total > frameLimit ? { bytes, limit: frameLimit, total } : null;
 }
 
-export function doSend(to, text, origin, local, state, env) {
+/**
+ * 真正发出。确认过群发之后也走这里,避免两条路径。
+ *
+ * opts.kind:
+ *   "send"  普通通知(缺省)
+ *   "ask"   要求回信
+ *   "reply" 显式回复(team_reply)
+ *
+ * 只有 reply 例外于“有待回复就阻断”:回复正是解除阻断的动作,即便同一
+ * 队友还有别的未回复请求,也要允许针对其中一条发出(只消费匹配的那条)。
+ *
+ * 阻断在这里**再查一次**:群发确认对话框弹出到真正发送之间可能收到新
+ * 的请求,如果只在 transmit 里查一次,确认后的那一下就会漏过去。
+ */
+export function doTransmit(to, text, origin, local, state, env, opts = {}) {
+  const kind = opts.kind ?? (opts.requireResponse === true ? "ask" : "send");
+  const isReply = kind === "reply";
+
+  if (!isReply) {
+    const blocked = blockedTargets(state, local?.targets ?? []);
+    if (blocked.length) return bad(blockedMessage(blocked));
+  }
+
   // 先查体积再查连接:超长是本地就能判断的问题,不该依赖连接状态
   const over = oversizeBy(text);
   if (over) {
@@ -616,15 +680,27 @@ export function doSend(to, text, origin, local, state, env) {
   // 记下 origin:对方回复时靠它判断"模型知道这回事吗"
   state.outbound.set(id, { text, origin, to });
 
-  // 发给一个正有待回复请求的队友 → 认成对那条请求的回复。
-  // 带上 re,对端才知道这是回复、不该再自动回信;不带的话两个 agent
-  // 会互相触发下去,只能靠跳数上限兜住。
-  const { replyTo, re, hops } = bindReply(state, local.targets);
+  // send/ask **不** 再自动关联任何入站请求:回复只能由 team_reply 用显式
+  // request id 发出,所以 send/ask 的 re 永远是空、跳数从 0 开始。
+  // reply 的 re/hops 由调用方从存储的请求里带进来(route 到原发信人)。
+  const re = isReply ? opts.re ?? null : null;
+  const hops = isReply && typeof opts.hops === "number" ? opts.hops : 0;
+  const requireResponse = kind === "ask";
 
   const lines = [
-    t(M.dispatch.sendSent, { to: formatTarget(to), count: local.targets.length }),
+    t(M.dispatch.sendSent, { to: formatTarget(to), count: local?.targets?.length ?? 1 }),
   ];
-  if (replyTo) lines.push(t(M.dispatch.sendAsReply, { id: replyTo }));
+  if (isReply) lines.push(t(M.dispatch.explicitReplySent, { id: re }));
+  else if (requireResponse) lines.push(t(M.dispatch.sendAwaitReply));
+
+  // 显式回复的 send 意图带一个**私有**字段 replyRequestId。它不进信封
+  // (transmitBodyFrom 只取 text/hops/fyi/requireResponse),只用来把"哪条
+  // 请求应被消费"交给真正把信封写出去的调用方 —— 只有 transport.send
+  // 确认成功后才由 runIntentions 消费,写失败/抛异常时义务原样保留。
+  const recipients = !isReply && (Array.isArray(to) || to === "*" || to.startsWith("@") || to.startsWith("#"))
+    ? [...local.targets] : to;
+  const sendIntent = { type: "send", to: recipients, id, re, text, hops, requireResponse };
+  if (isReply) sendIntent.replyRequestId = String(opts.replyRequestId ?? re ?? "");
 
   return ok(lines, {
     intentions: [
@@ -632,8 +708,8 @@ export function doSend(to, text, origin, local, state, env) {
       // 由 index.ts 组装成信封的 body。
       // 曾经一边写 body:{text} 一边读 it.text,导致 /team send 发出
       // 空正文的消息 —— 对方只看到空字符串,症状是"投递成功但对方没反应"。
-      { type: "send", to, id, re, text, hops },
-      { type: "card", kind: replyTo ? "reply" : "send", peer: formatTarget(to), text },
+      sendIntent,
+      { type: "card", kind: isReply ? "reply" : "send", peer: formatTarget(to), text },
     ],
   });
 }
@@ -658,7 +734,7 @@ export function normalizeReplyMode(raw) {
   return { mode: null, legacy: false };
 }
 
-function replyResult(args, state, sub = "reply") {
+function replyPolicyResult(args, state, sub = "replies") {
   const raw = args[0];
   if (!raw) {
     return ok([
@@ -694,4 +770,60 @@ function replyResult(args, state, sub = "reply") {
   const lines = [t(M.dispatch.replySet, { mode }), note];
   if (legacy) lines.push(t(M.dispatch.replyLegacy, { old: raw, mode }));
   return ok(lines);
+}
+
+/**
+ * /team reply 的入口。
+ *
+ * ── 为什么在这里做一个无歧义的分流 ──
+ *   reply 曾经是提醒策略(/team reply off|remind|mirror)。现在它是显式
+ *   回复,格式为 /team reply <requestId> <text>。request id 形如 m-…,
+ *   永远不会等于一个模式名,所以“只有一个参数且是模式名”就是旧写法,
+ *   其余一律当成显式回复。旧写法仍有效,并提示策略已搬到 /team replies。
+ */
+function replySubcommand(args, state, env, origin) {
+  if (args.length === 1) {
+    const { mode } = normalizeReplyMode(args[0]);
+    if (mode) {
+      const r = replyPolicyResult(args, state, "reply");
+      r.lines.push(t(M.dispatch.replyMovedHint));
+      return r;
+    }
+  }
+  return explicitReplyResult(args, state, env, origin);
+}
+
+/**
+ * 显式回复:按 request id 找回原发信人,把回复发给它。
+ *
+ * 没有 request id、或 id 未知/已回复/过期(重启后内存里的记录没了)→ 直接
+ * 失败,**不发任何信封,也不动任何待回复**。绝不能靠"发给谁"猜目标:
+ * 猜错会把回复寄给错误的人,而正确的那条义务还留着。
+ *
+ * 只有本地校验 + 连接都通过、真的产出了发送意图之后才消费匹配的那一条
+ * (离线/超长时保留义务,不提前消费)。同一队友的其它请求不受影响。
+ *
+ * 注意:真正的消费不在这里 —— dispatch 不知道 transport.send 的结果。
+ * 这里只把 request id 写进 send 意图的私有字段 replyRequestId,由
+ * index.ts 的 runIntentions 在确认写入成功后消费。
+ */
+function explicitReplyResult(args, state, env, origin) {
+  const requestId = typeof args[0] === "string" ? args[0] : "";
+  const text = args.slice(1).join(" ");
+  if (!requestId || !text) return bad(t(M.dispatch.explicitReplyUsage));
+
+  const bound = bindRequest(state, requestId);
+  if (!bound) return bad(t(M.dispatch.explicitReplyUnknown, { id: requestId }));
+
+  const local = { targets: [bound.replyTo], unknown: [] };
+  const r = doTransmit(bound.replyTo, text, origin === "model" ? "model" : "user", local, state, env, {
+    kind: "reply",
+    re: bound.re,
+    hops: bound.hops,
+    // 不在 dispatch 里消费:把 request id 交给调用方,只有 transport.send
+    // 确认成功后才消费。dispatch 不知道真实写入结果,提前消费会在写失败
+    // 时把义务弄丢(且发送阻断失效)。
+    replyRequestId: requestId,
+  });
+  return r;
 }

@@ -18,6 +18,7 @@ export const zhHans = Object.freeze({
   "notify.files_one": "{count} 个文件",
   "notify.files_other": "{count} 个文件",
   "notify.sendFailed": "team:未连接,消息没发出去",
+  "notify.sendError": "team:发送失败 —— {reason}",
   "notify.injectFailed": "team:注入失败 {reason}",
   "notify.remindFailed": "team:提醒失败 {reason}",
   "notify.cancelled": "已取消",
@@ -52,8 +53,10 @@ export const zhHans = Object.freeze({
   "tool.moreLines_other": "…还有 {count} 行",
   "tool.cardMoreLines_one": "…还有 {count} 行(展开查看)",
   "tool.cardMoreLines_other": "…还有 {count} 行(展开查看)",
+  "tool.requireResponse": "(要求回信)",
   "tool.notConnected": "未连接,消息没发出去",
   "tool.delivered": "✓ 已投递给 {to}",
+  "tool.replied": "✓ 已回复 {id}",
   "tool.noPeers": "(无其他节点)",
   "tool.currentTeam": "(当前)",
 
@@ -144,7 +147,7 @@ export const zhHans = Object.freeze({
   "dispatch.label.reconnect": "(标签变了,正在重连 broker)",
   "dispatch.label.usage": "用法:/team label [list|add <名字...>|remove <名字...>]",
 
-  "dispatch.send.usage": "用法:/team send <名字|@分组|*|@default|a,b> <内容>",
+  "dispatch.send.usage": "用法:/team {sub} <名字|@分组|*|@default|a,b> <内容>",
   "dispatch.send.noMatch": "没有匹配的收件人({targets})",
   "dispatch.send.noPeers": "没有其他节点在线",
   "dispatch.send.bulk_one": "准备群发给 {count} 个节点:{targets}",
@@ -154,6 +157,12 @@ export const zhHans = Object.freeze({
   "dispatch.send.sent_one": "已发给 {to}({count} 个节点)",
   "dispatch.send.sent_other": "已发给 {to}({count} 个节点)",
   "dispatch.send.asReply": "(作为对 {id} 那条请求的回复)",
+  "dispatch.send.awaitReply": "(已要求对方回信)",
+  "dispatch.send.blocked": "对方还有未回复的请求时不能发送:{requests}。请先用 team_reply 回复。",
+
+  "dispatch.explicitReply.usage": "用法:/team reply <requestId> <内容>。requestId 在注入的 [team 请求] 消息里。回信策略现在是 /team replies <off|remind|mirror>。",
+  "dispatch.explicitReply.unknown": "找不到可回复的请求 \"{id}\"(未知、已回复或已过期)。没有发出任何消息。",
+  "dispatch.explicitReply.sent": "(已回复 {id})",
 
   "dispatch.target.all": "全员",
   "dispatch.target.default": "默认组",
@@ -169,6 +178,7 @@ export const zhHans = Object.freeze({
   "dispatch.reply.noteMirror": "每轮输出都镜像给所有节点(fyi,不叫醒对方)",
   "dispatch.reply.set": "reply={mode}",
   "dispatch.reply.legacy": "(旧名字 \"{old}\" 仍可用,但现在叫 \"{mode}\")",
+  "dispatch.reply.movedHint": "(回信策略已搬家:请用 /team replies <off|remind|mirror>)",
 
   "session.noMatch": "没有匹配的收件人({targets})",
   "session.noPeers": "没有其他节点在线",
@@ -243,7 +253,7 @@ export const zhHans = Object.freeze({
   "command.team": "Pi Agent Team:状态 / 成员 / 发送 / team 生命周期 / 标签",
 
   "tool.sendFailed": "发送失败:{error}",
-  "tool.receipt": "{summary}。回执只表示对方 socket 收到了,不表示对方已处理完。",
+  "tool.receipt": "{summary}。回执只表示本地传输已接受,不表示对方已收到或处理。",
   "tool.failed": "失败:{error}",
 
   "ui.confirmBulkTitle_one": "群发给 {count} 个节点?",
@@ -278,6 +288,9 @@ export const zhHans = Object.freeze({
   "ui.selectSendWho": "发给谁?",
   "ui.inputSendTo": "发给 {name}",
   "ui.placeholderMessage": "消息内容",
+  "ui.selectMessageKind": "这条消息怎么发?",
+  "ui.messageKindSend": "send — 通知;唤醒对方但不要求回信",
+  "ui.messageKindAsk": "ask — 要求回信;对方不回复会被提醒一次",
 
   "ui.broadcastDefault_one": "@default — 默认组({count} 个节点)",
   "ui.broadcastDefault_other": "@default — 默认组({count} 个节点)",
@@ -310,6 +323,13 @@ export const zhHans = Object.freeze({
   "ui.replyOff": "off — 不提醒,回不回由模型自己决定",
   "ui.replyRemind": "remind — 请求没被回复时提醒一次",
   "ui.replyMirror": "mirror — 每轮输出都镜像给所有节点(两边都开会互相刷屏)",
+
+  "ui.menuReplyPending_one": "↩️ 回复待处理的请求  ({count})",
+  "ui.menuReplyPending_other": "↩️ 回复待处理的请求  ({count})",
+  "ui.selectReplyPending": "回复哪一条请求?",
+  "ui.inputReplyText": "回复 {peer}",
+  "ui.replyPendingNone": "当前没有待回复的请求",
+  "ui.acPendingFrom": "来自 {peer} 的待回复请求",
 
   "ui.acDefaultGroup": "默认组(全员)",
   "ui.acAll": "全员",

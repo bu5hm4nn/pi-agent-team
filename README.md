@@ -22,11 +22,23 @@ No public relay, no phone app, no account.
 - **A teammate's message reaches the model without interrupting it.** It is
   delivered as a custom message: while the agent is mid-tool-call it queues, and
   the model sees it at the next turn instead of having its work cut short.
-- **The model answers with `team_send`.** No output is mirrored automatically,
+- **The model answers with `team_reply`.** No output is mirrored automatically,
   so a run that was doing something else cannot have its tail sent to the wrong
   peer as a "reply".
 - **The conversation ends.** A request is answered; a reply is not. Two agents
-  cannot talk in circles.
+  cannot talk in circles. Messages do not ask for a reply unless they were sent
+  with `team_ask`.
+- **Choosing whether a reply is wanted.** `team_send` delivers and wakes the
+  peer but does not ask it to answer. Use `team_ask` only when you actually need
+  an answer; the peer is then reminded once if it stays silent. Answering a
+  teammate always goes through `team_reply({ requestId, text })`, which routes
+  the answer to the original sender. Both sends return a delivery receipt
+  immediately — neither waits.
+- **A pending request blocks new sends to that peer.** While a teammate is
+  waiting for your answer, `team_send` / `team_ask` to that peer are rejected
+  (the error lists the request id); answer with `team_reply` first. Other peers
+  are unaffected. This keeps an incoming request from being silently buried
+  under new traffic.
 - **You can see it.** `📥 RECV` / `📤 SEND` / `🔁 REPLY` / `⚠️ FAIL` cards in the
   transcript. Display only — they never enter the model's context.
 - **Two entry points.** `/team` commands for you, `team_*` tools for the model.
@@ -127,6 +139,7 @@ prints the right one.
 /team                     # interactive menu
 /team peers               # who is online
 /team send other hello
+/team ask srv-api run the migration and report back
 /team send "@web" deploy is starting
 /team send '*' maintenance in 5 minutes
 ```
@@ -156,8 +169,11 @@ TEAM_LABELS=web \
 ```
 
 **Tools — for the model and automation.** `team_join`, `team_info`,
-`team_roster`, `team_send`, `team_label`, `team_leave`. `team_join` takes the
-same options as `/team join`.
+`team_roster`, `team_send`, `team_ask`, `team_reply`, `team_label`,
+`team_leave`. `team_join` takes the same options as `/team join`. `team_send`
+and `team_ask` take the same `to` forms; they differ only in whether a reply is
+requested. `team_reply` takes a `requestId` (from an injected `[team request]`
+message) and a `text`, and sends the answer back to that request's sender.
 
 | Option | Meaning | Saved? |
 |---|---|---|
@@ -178,11 +194,43 @@ Reply behaviour is a separate setting, not a connection option:
 | `remind` *(default)* | Reminds once when a request goes unanswered |
 | `mirror` | Mirrors every turn's output to all nodes as `fyi` (both sides on means both keep posting) |
 
-Set it with `reply=` / `TEAM_REPLY` / `--team-reply`, or `/team reply <mode>` at
-runtime. The older names still work: `TEAM_ANNOUNCE`, `--team-announce`,
-`/team announce`, and the values `auto` (now `remind`) and `always` (now
-`mirror`). Using one prints a note saying what it is called now — `auto` and
-`always` no longer describe what the mode does, which is why they were renamed.
+Set it with `reply=` / `TEAM_REPLY` / `--team-reply`, or `/team replies <mode>`
+at runtime. The older names still work: `TEAM_ANNOUNCE`, `--team-announce`,
+`/team announce`, `/team reply <mode>` (when it is given a single mode word),
+and the values `auto` (now `remind`) and `always` (now `mirror`). Using one
+prints a note saying what it is called now — `auto` and `always` no longer
+describe what the mode does, which is why they were renamed.
+
+### Asking for a reply (per message)
+
+`reply` decides what this node does about *incoming* requests. Whether a
+*specific* message asks for a reply is a property of that message — and it is
+chosen by which tool (or command) sends it, not by a flag:
+
+| How | Effect |
+|---|---|
+| `team_send({ to, text })` — or `/team send other hi` | Delivered and the peer is woken, but no reply is requested; no reminder is created. **This is the default.** |
+| `team_ask({ to, text })` — or `/team ask other run the migration and report back` | The peer is asked to answer and is reminded once if it does not. |
+| `team_reply({ requestId, text })` — or `/team reply <requestId> <text>` | Answers that exact request and routes the reply to its sender. This is the only way to satisfy a request. |
+
+Both return a delivery receipt immediately; `team_ask` does **not** wait for the
+answer — the reply arrives later as a team message. Answering a teammate is
+always `team_reply({ requestId, text })`: the `requestId` is shown in the
+injected message, the answer goes back to the original sender, and a reply never
+asks for a reply, so conversations still end. `team_send` and `team_ask` are
+always *new* messages — they are never counted as an answer to an earlier one,
+even from the same peer.
+
+While a teammate has an unanswered request, `team_send` / `team_ask` to that
+peer are rejected and the error lists the pending request id(s); reply with
+`team_reply` first. Multi-recipient sends (`@label`, `*`, a comma list) are
+validated as a whole and rejected atomically if any recipient is blocked — no
+partial send. Other peers are unaffected. On the receiving side, `reply=off`
+still suppresses the reminder entirely, but it does not erase the obligation:
+the peer stays blocked until answered explicitly.
+
+The receiving agent is always woken either way — `team_ask` controls whether an
+answer is *expected*, not whether the message is delivered.
 
 The last four are not saved because one machine can run several Pi agents and
 they share one config file. Saving the name would have the second agent
