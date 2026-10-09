@@ -318,6 +318,9 @@ const ui = Object.freeze({
   selectSendWho: "ui.selectSendWho",
   inputSendTo: "ui.inputSendTo",
   placeholderMessage: "ui.placeholderMessage",
+  selectMessageKind: "ui.selectMessageKind",
+  messageKindSend: "ui.messageKindSend",
+  messageKindAsk: "ui.messageKindAsk",
 
   broadcastDefault: "ui.broadcastDefault",
   broadcastAll: "ui.broadcastAll",
@@ -352,7 +355,6 @@ const ui = Object.freeze({
   acAll: "ui.acAll",
   acGroup: "ui.acGroup",
   acKnownConfig: "ui.acKnownConfig",
-  acRequireResponse: "ui.acRequireResponse",
   acNodeName: "ui.acNodeName",
   acLabels: "ui.acLabels",
 });

@@ -26,12 +26,12 @@ No public relay, no phone app, no account.
   so a run that was doing something else cannot have its tail sent to the wrong
   peer as a "reply".
 - **The conversation ends.** A request is answered; a reply is not. Two agents
-  cannot talk in circles. Messages do not ask for a reply unless you
-  explicitly ask for one.
+  cannot talk in circles. Messages do not ask for a reply unless they were sent
+  with `team_ask`.
 - **Choosing whether a reply is wanted.** `team_send` delivers and wakes the
-  peer by default, but does not ask it to answer. Set `requireResponse: true`
-  (or `/team send --require-response`) only when you actually need an answer;
-  the peer is then reminded once if it stays silent.
+  peer but does not ask it to answer. Use `team_ask` only when you actually need
+  an answer; the peer is then reminded once if it stays silent. Both return a
+  delivery receipt immediately — neither waits for the answer.
 - **You can see it.** `📥 RECV` / `📤 SEND` / `🔁 REPLY` / `⚠️ FAIL` cards in the
   transcript. Display only — they never enter the model's context.
 - **Two entry points.** `/team` commands for you, `team_*` tools for the model.
@@ -177,7 +177,7 @@ the token itself.
 /team                     # interactive menu
 /team peers               # who is online
 /team send other hello
-/team send --require-response srv-api run the migration and report back
+/team ask srv-api run the migration and report back
 /team send "@web" deploy is starting
 /team send '*' maintenance in 5 minutes
 ```
@@ -207,8 +207,9 @@ TEAM_LABELS=web \
 ```
 
 **Tools — for the model and automation.** `team_join`, `team_info`,
-`team_roster`, `team_send`, `team_label`, `team_leave`. `team_join` takes the
-same options as `/team join`.
+`team_roster`, `team_send`, `team_ask`, `team_label`, `team_leave`. `team_join`
+takes the same options as `/team join`. `team_send` and `team_ask` take the
+same `to` forms; they differ only in whether a reply is requested.
 
 | Option | Meaning | Saved? |
 |---|---|---|
@@ -240,21 +241,24 @@ runtime. The older names still work: `TEAM_ANNOUNCE`, `--team-announce`,
 ### Asking for a reply (per message)
 
 `reply` decides what this node does about *incoming* requests. Whether a
-*specific* message asks for a reply is a property of that message:
+*specific* message asks for a reply is a property of that message — and it is
+chosen by which tool (or command) sends it, not by a flag:
 
 | How | Effect |
 |---|---|
 | `team_send({ to, text })` — or `/team send other hi` | Delivered and the peer is woken, but no reply is requested; no reminder is created. **This is the default.** |
-| `team_send({ to, text, requireResponse: true })` — or `/team send --require-response other hi` | The peer is asked to answer and is reminded once if it does not. |
+| `team_ask({ to, text })` — or `/team ask other run the migration and report back` | The peer is asked to answer and is reminded once if it does not. |
 
-The flag lives on the message, not in the config, and `--require-response` must
-come **before** the recipient so a message body that happens to contain the
-same text is never eaten. A reply never asks for a reply, even if the flag is
-set: it is bound to the message it answers, so conversations still end. On the
-receiving side the flag is ignored entirely when `reply=off`.
+Both return a delivery receipt immediately; `team_ask` does **not** wait for the
+answer — the reply arrives later as a team message. A reply never asks for a
+reply, even when it was sent to a peer you had asked: it is bound to the message
+it answers, so conversations still end. A `team_ask` is always a new request —
+it is never counted as an answer to an earlier message, even one from the same
+peer — so answering a teammate is always `team_send`. On the receiving side,
+`reply=off` still suppresses the reminder entirely.
 
-The receiving agent is always woken either way — `requireResponse` controls
-whether an answer is *expected*, not whether the message is delivered.
+The receiving agent is always woken either way — `team_ask` controls whether an
+answer is *expected*, not whether the message is delivered.
 
 The last four are not saved because one machine can run several Pi agents and
 they share one config file. Saving the name would have the second agent

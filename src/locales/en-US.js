@@ -157,7 +157,7 @@ export const enUS = Object.freeze({
   "dispatch.label.reconnect": "(labels changed; reconnecting to the broker)",
   "dispatch.label.usage": "Usage: /team label [list|add <name...>|remove <name...>]",
 
-  "dispatch.send.usage": "Usage: /team send [--require-response] <name|@group|*|@default|a,b> <message>",
+  "dispatch.send.usage": "Usage: /team {sub} <name|@group|*|@default|a,b> <message>",
   "dispatch.send.noMatch": "No matching recipients ({targets})",
   "dispatch.send.noPeers": "No other nodes online",
   "dispatch.send.bulk_one": "About to send to {count} node: {targets}",
@@ -319,6 +319,9 @@ export const enUS = Object.freeze({
   "ui.selectSendWho": "Send to whom?",
   "ui.inputSendTo": "Send to {name}",
   "ui.placeholderMessage": "Message text",
+  "ui.selectMessageKind": "How should this be sent?",
+  "ui.messageKindSend": "send — informational; the peer is woken but no reply is requested",
+  "ui.messageKindAsk": "ask — request a reply; the peer is reminded once if it stays silent",
 
   "ui.broadcastDefault_one": "@default — default group ({count} node)",
   "ui.broadcastDefault_other": "@default — default group ({count} nodes)",
@@ -356,7 +359,6 @@ export const enUS = Object.freeze({
   "ui.acAll": "everyone",
   "ui.acGroup": "group",
   "ui.acKnownConfig": "already configured on this machine",
-  "ui.acRequireResponse": "ask the recipient to reply (default: off)",
   "ui.acNodeName": "this node's name (this run only)",
   "ui.acLabels": "labels, comma-separated",
   "ui.acPunch": "join with a punch:// URI (a single URI is all you need)",

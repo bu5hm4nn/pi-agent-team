@@ -154,7 +154,7 @@ export const zhHans = Object.freeze({
   "dispatch.label.reconnect": "(标签变了,正在重连 broker)",
   "dispatch.label.usage": "用法:/team label [list|add <名字...>|remove <名字...>]",
 
-  "dispatch.send.usage": "用法:/team send [--require-response] <名字|@分组|*|@default|a,b> <内容>",
+  "dispatch.send.usage": "用法:/team {sub} <名字|@分组|*|@default|a,b> <内容>",
   "dispatch.send.noMatch": "没有匹配的收件人({targets})",
   "dispatch.send.noPeers": "没有其他节点在线",
   "dispatch.send.bulk_one": "准备群发给 {count} 个节点:{targets}",
@@ -316,6 +316,9 @@ export const zhHans = Object.freeze({
   "ui.selectSendWho": "发给谁?",
   "ui.inputSendTo": "发给 {name}",
   "ui.placeholderMessage": "消息内容",
+  "ui.selectMessageKind": "这条消息怎么发?",
+  "ui.messageKindSend": "send — 通知;唤醒对方但不要求回信",
+  "ui.messageKindAsk": "ask — 要求回信;对方不回复会被提醒一次",
 
   "ui.broadcastDefault_one": "@default — 默认组({count} 个节点)",
   "ui.broadcastDefault_other": "@default — 默认组({count} 个节点)",
@@ -353,7 +356,6 @@ export const zhHans = Object.freeze({
   "ui.acAll": "全员",
   "ui.acGroup": "分组",
   "ui.acKnownConfig": "本机已有配置",
-  "ui.acRequireResponse": "要求对方回信(默认关闭)",
   "ui.acNodeName": "本节点名(仅本次运行)",
   "ui.acLabels": "标签,逗号分隔",
   "ui.acPunch": "punch://... 加入(一条 URI 就够)",

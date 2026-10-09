@@ -30,8 +30,8 @@ import {
   parseRecipients,
   rememberPending,
   resolveLocal,
-  sendBodyFrom,
-  sendMessage,
+  transmitBodyFrom,
+  transmit,
   teamSize,
 } from "./session.js";
 import { setLocale } from "./i18n.js";
@@ -314,16 +314,16 @@ test("resolveLocal:并集去重", () => {
   assert.deepEqual(r.targets.sort(), ["a", "b"], "a 同时被 @web 和显式点名,只应算一次");
 });
 
-test("sendMessage:无匹配收件人时只出警告,不发送", () => {
+test("transmit:无匹配收件人时只出警告,不发送", () => {
   const s = session("me", []);
-  const actions = sendMessage(s, { to: "@nobody", text: "x" });
+  const actions = transmit(s, { to: "@nobody", text: "x" });
   assert.deepEqual(types(actions), ["notify"]);
   assert.equal(actions[0].level, "warning");
 });
 
-test("sendMessage:记录 origin 供日后判断,并产出 send + card", () => {
+test("transmit:记录 origin 供日后判断,并产出 send + card", () => {
   const s = session("me", [member("peer")]);
-  const actions = sendMessage(s, { to: "peer", text: "你好", origin: "user" });
+  const actions = transmit(s, { to: "peer", text: "你好", origin: "user" });
 
   assert.deepEqual(types(actions), ["send", "card"]);
   const id = actions[0].id;
@@ -335,7 +335,7 @@ test("sendMessage:记录 origin 供日后判断,并产出 send + card", () => {
 
 test("对话形状:我们发出的消息被别人回复 → 注入、不回信", () => {
   const s = session();
-  const [sent] = sendMessage(s, { to: "peer", text: "原始提问", origin: "model" });
+  const [sent] = transmit(s, { to: "peer", text: "原始提问", origin: "model" });
   const id = sent.id;
 
   const cls = classifyInbound(s, { from: "peer", id: "r-1", re: id, body: { text: "答复" } });
@@ -350,9 +350,9 @@ test("对话形状:我们发出的消息被别人回复 → 注入、不回信",
 
 test("对话形状:用户 /team send 发出的消息被回复 → 只显示卡片", () => {
   // 注意:这里必须用真实存在的收件人。用 @web 而 fixture 里没有 web label 的话,
-  // sendMessage 只会返回一条 warning,拿不到真正发出的 id,测试就测错了对象。
+  // transmit 只会返回一条 warning,拿不到真正发出的 id,测试就测错了对象。
   const s = session("me", [member("peer")]);
-  const [sent] = sendMessage(s, { to: "peer", text: "用户手动问的", origin: "user" });
+  const [sent] = transmit(s, { to: "peer", text: "用户手动问的", origin: "user" });
   assert.equal(sent.type, "send", "前置条件:一定要拿到真实的 send 动作");
 
   const actions = handleIncoming(s, { from: "peer", id: "r-2", re: sent.id, body: { text: "答复" } });
@@ -418,7 +418,7 @@ test("对话形状:一来一回之后停下来,不会互相触发下去", () => 
   const nodes = { A: session("A", [member("B")]), B: session("B", [member("A")]) };
   const wire = [];
 
-  const first = sendMessage(nodes.A, { to: "B", text: "原始提问", origin: "model", requireResponse: true });
+  const first = transmit(nodes.A, { to: "B", text: "原始提问", origin: "model", requireResponse: true });
   const sa = first.find((a) => a.type === "send");
   wire.push({ to: "B", env: { from: "A", id: sa.id, re: null, body: { text: "原始提问", hops: 0, requireResponse: true } } });
 
@@ -471,18 +471,20 @@ test("对话形状:一来一回之后停下来,不会互相触发下去", () => 
 test("一来一回:回复不会把接收方拖进新的待回复", () => {
   // 这是循环能否终止的关键。若回复也进队列,双方就会一直互相催下去。
   const s = session("A", [member("B")]);
-  const out = sendMessage(s, { to: "B", text: "我方提问", origin: "model" });
+  const out = transmit(s, { to: "B", text: "我方提问", origin: "model" });
   const id = out.find((a) => a.type === "send").id;
 
   handleIncoming(s, { from: "B", id: "reply-1", re: id, body: { text: "对方的答复", hops: 1 } });
   assert.equal(s.pendingReplies.length, 0, "收到回复不应要求我们再回复");
 });
 
-// ================================================================ 响应策略(requireResponse)
+// ================================================================ 响应策略(send / ask 的 wire 语义)
 
 /**
- * 队友消息默认只是送达并唤醒模型,不要求回复;只有显式要求(requireResponse=true)
- * 才建立待回复与提醒。这组测试把"缺省 / false / true"三条路径钉死。
+ * 队友消息默认只是送达并唤醒模型,不要求回复;只有发送方用 team_ask
+ * 发出(信封上 requireResponse=true)时才建立待回复与提醒。这组测试把
+ * "缺省 / false / true"三条 wire 路径钉死 —— requireResponse 是私有
+ * 元数据,公开工具已不再暴露它。
  */
 test("响应策略:未要求回信(缺省 / false)仍然注入并唤醒,但不设待回复", () => {
   for (const body of [
@@ -503,7 +505,7 @@ test("响应策略:未要求回信(缺省 / false)仍然注入并唤醒,但不�
   }
 });
 
-test("响应策略:requireResponse=true 才建立待回复,并在看到后提醒一次", () => {
+test("响应策略:wire 标志 requireResponse=true(team_ask)才建立待回复,并在看到后提醒一次", () => {
   const s = session("me", [member("peer")]);
   const actions = handleIncoming(s, {
     from: "peer",
@@ -525,7 +527,7 @@ test("响应策略:requireResponse=true 才建立待回复,并在看到后提醒
 
 test("响应策略:回复即便带 requireResponse=true 也不反向要求回复", () => {
   const s = session("me", [member("peer")]);
-  const [sent] = sendMessage(s, { to: "peer", text: "我方提问", origin: "model", requireResponse: true });
+  const [sent] = transmit(s, { to: "peer", text: "我方提问", origin: "model", requireResponse: true });
 
   const env = { from: "peer", id: "r-9", re: sent.id, body: { text: "答复", hops: 1, requireResponse: true } };
   const cls = classifyInbound(s, env);
@@ -582,20 +584,6 @@ test("响应策略:入站关联与待回复相互独立,要求回信的消息优
   assert.equal(bindReply(s, ["peer"]).re, null, "同一入站消息不会被复用");
 });
 
-test("响应策略:显式要求回信的消息不被可选关联吞掉,而是作为新请求发出", () => {
-  const s = session("me", [member("peer")]);
-  handleIncoming(s, { from: "peer", id: "note-1", re: null, body: { text: "通知", hops: 0 } });
-  assert.equal(s.incomingIds.get("peer").id, "note-1", "前置条件:已有关联");
-
-  // requireResponse=true 说明这是**新请求**,不能静默绑成对旧通知的回复,
-  // 否则 requireResponse 会被归零、对端就不会被提醒。
-  const r = bindReply(s, ["peer"], { allowAssociation: false });
-  assert.deepEqual(r, { replyTo: null, re: null, hops: 0 }, "要求回信时应当作新请求");
-
-  // 关联仍在,留给真正的可选回复
-  assert.equal(bindReply(s, ["peer"]).re, "note-1");
-});
-
 test("响应策略:buildPayload 在不要求回信时明确说无需回信", () => {
   const want = buildPayload("p", "任务", { kind: "request", requireResponse: true });
   assert.match(want, /team_send\(\{ to: "p"/, "要求回信时给出回复入口");
@@ -610,7 +598,7 @@ test("响应策略:默认不要求回信时,一来一往不产生任何系统级
   const nodes = { A: session("A", [member("B")]), B: session("B", [member("A")]) };
 
   // A 发一条未要求回信的消息(缺省 false)
-  const [sent] = sendMessage(nodes.A, { to: "B", text: "通知", origin: "model" });
+  const [sent] = transmit(nodes.A, { to: "B", text: "通知", origin: "model" });
   const delivered = { from: "A", id: sent.id, re: null, body: { text: "通知", hops: 0 } };
 
   const bActions = handleIncoming(nodes.B, delivered);
@@ -631,19 +619,19 @@ test("响应策略:默认不要求回信时,一来一往不产生任何系统级
   assert.deepEqual(onTurnSettled(nodes.A).filter((a) => a.type === "send" || a.type === "remind"), []);
 });
 
-test("响应策略:sendBodyFrom 只把 true 写进信封(缺省 / false 一律不写,接收按 false 处理)", () => {
+test("响应策略:transmitBodyFrom 只把 true 写进信封(缺省 / false 一律不写,接收按 false 处理)", () => {
   const base = { text: "x", hops: 2 };
-  assert.deepEqual(sendBodyFrom({ ...base }), { text: "x", hops: 2 }, "缺省不能凭空多出字段");
-  assert.deepEqual(sendBodyFrom({ ...base, requireResponse: false }), { text: "x", hops: 2 }, "显式 false 不进信封");
-  assert.deepEqual(sendBodyFrom({ ...base, requireResponse: true }), { text: "x", hops: 2, requireResponse: true });
-  assert.deepEqual(sendBodyFrom({ ...base, fyi: true, requireResponse: true }), {
+  assert.deepEqual(transmitBodyFrom({ ...base }), { text: "x", hops: 2 }, "缺省不能凭空多出字段");
+  assert.deepEqual(transmitBodyFrom({ ...base, requireResponse: false }), { text: "x", hops: 2 }, "显式 false 不进信封");
+  assert.deepEqual(transmitBodyFrom({ ...base, requireResponse: true }), { text: "x", hops: 2, requireResponse: true });
+  assert.deepEqual(transmitBodyFrom({ ...base, fyi: true, requireResponse: true }), {
     text: "x",
     hops: 2,
     fyi: true,
     requireResponse: true,
   });
   // 缺 hops 时沿用旧默认值 1
-  assert.equal(sendBodyFrom({ text: "y" }).hops, 1);
+  assert.equal(transmitBodyFrom({ text: "y" }).hops, 1);
 });
 
 // ================================================================ 杂项
@@ -672,7 +660,7 @@ test("excerpt:压缩空白并截断", () => {
 
 test("出站记录有上限,不无限增长", () => {
   const s = session("me", [member("peer")]);
-  for (let i = 0; i < 1200; i++) sendMessage(s, { to: "peer", text: `m${i}`, origin: "model" });
+  for (let i = 0; i < 1200; i++) transmit(s, { to: "peer", text: `m${i}`, origin: "model" });
   assert.ok(s.outbound.size <= 1000, `outbound 应被限制,实际 ${s.outbound.size}`);
 });
 
@@ -756,9 +744,9 @@ test("契约:reply=mirror 的 send 意图同样带 text / hops / fyi", () => {
   assert.ok(send.id);
 });
 
-test("契约:sendMessage 的 send 意图带 text / hops / id", () => {
+test("契约:transmit 的 send 意图带 text / hops / id", () => {
   const s = session("me", [member("peer")]);
-  const actions = sendMessage(s, { to: "peer", text: "手动发出", origin: "user" });
+  const actions = transmit(s, { to: "peer", text: "手动发出", origin: "user" });
   const send = actions.find((a) => a.type === "send");
 
   assert.ok(send);
@@ -773,7 +761,7 @@ test("契约:所有 send 意图都不使用 body 字段(由调用方组装)", ()
   s.lastText = "x";
 
   const fromSettled = onTurnSettled({ ...s, reply: "mirror", lastText: "x" });
-  const fromSend = sendMessage(s, { to: "peer", text: "y", origin: "user" });
+  const fromSend = transmit(s, { to: "peer", text: "y", origin: "user" });
 
   for (const a of [...fromSettled, ...fromSend].filter((x) => x.type === "send")) {
     assert.equal("body" in a, false, "send 意图不该自带 body —— 那是 index.ts 的职责");

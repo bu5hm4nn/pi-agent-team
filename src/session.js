@@ -275,7 +275,7 @@ export function resolveLocal(s, to) {
  * origin 是要紧的:对方回复时,靠它判断"模型知道这回事吗"。
  * 用户用 /team send 发的消息,模型完全不知道,不该被叫醒来疑惑。
  */
-export function sendMessage(s, { to, text, hops = 0, re = null, origin = "user", fyi = false, requireResponse = false }) {
+export function transmit(s, { to, text, hops = 0, re = null, origin = "user", fyi = false, requireResponse = false }) {
   const targets = resolveLocal(s, to);
   if (targets.targets.length === 0) {
     return [
@@ -315,8 +315,12 @@ function formatTarget(to) {
  * 的手动发送)共用同一套字段语义,信封形状不可能分叉,而且这段接线
  * 能被纯函数测到(requireResponse 只把 **true** 写进信封,缺省与 false
  * 都不写 —— 接收方按缺省即 false 处理,和 fyi 一致)。
+ *
+ * requireResponse 是**私有 wire 元数据**:公开工具已经没有这个布尔
+ * (team_send 不带、team_ask 带上),但信封格式沿用旧字段名,和其它
+ * 节点上的版本互通。
  */
-export function sendBodyFrom(intention = {}) {
+export function transmitBodyFrom(intention = {}) {
   return {
     text: String(intention.text ?? ""),
     hops: typeof intention.hops === "number" ? intention.hops : 1,
@@ -667,20 +671,21 @@ export function rememberPending(s, { from, id, hops, ref }) {
 }
 
 /**
- * 把一次出站发送绑定到某个入站消息上。
+ * 把一次出站发送绑定到某个入站消息上。仅供普通 send 使用。
  *
  * 优先绑定"要求回信的待回复":那是真正的请求,回它就把队列清掉。
  * 没有待回复时,退回到"入站关联" —— 对方刚发过一条不要求回信的消息,
  * 我们回它同样应带上 re。两种情况都返回对方的消息 id,跳数 +1。
  *
  * 关联是一次性的:用掉即删,免得后续一条全新的消息被误当成对旧消息的回复。
- * allowAssociation=false 时只走待回复通道 —— 发送方**显式要求回信**的消息
- * 是一条新请求,不能静默绑成对旧通知的回复(否则标志会被归零),所以调用方
- * 在 requireResponse=true 时关掉它。
+ *
+ * 谁调用它由调用方决定 —— team_ask 是显式的新请求,在 dispatch 的
+ * doTransmit 里直接跳过这个函数(re 为空、不消费任何待回复/关联),
+ * 所以这里不需要"要求回信"这层判断。
  *
  * @returns {{ replyTo: string|null, re: string|null, hops: number }}
  */
-export function bindReply(s, targets, { allowAssociation = true } = {}) {
+export function bindReply(s, targets) {
   const list = Array.isArray(targets) ? targets : [targets];
   if (list.length !== 1) return { replyTo: null, re: null, hops: 0 };
 
@@ -695,7 +700,7 @@ export function bindReply(s, targets, { allowAssociation = true } = {}) {
     return { replyTo: to, re: p.re, hops: Math.min(p.hops + 1, MAX_HOPS) };
   }
 
-  const near = allowAssociation ? s.incomingIds?.get(to) : undefined;
+  const near = s.incomingIds?.get(to);
   if (near) {
     s.incomingIds.delete(to);
     return { replyTo: to, re: near.id, hops: Math.min(near.hops + 1, MAX_HOPS) };

@@ -34,11 +34,11 @@ import { setLocale, getLocale, resolveLocale, resolveLocaleInfo, startupLocaleEn
 import { M } from "./src/messages.js";
 import { MODES, createTransport, modeReadiness, normalizeSeeds, resolveMode } from "./src/mode.js";
 import { parsePunchUri, punchFromEnv } from "./src/options.js";
-import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, sendBodyFrom, teamSize, applyRoster, TEAM_MESSAGE_TYPE } from "./src/session.js";
+import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, transmitBodyFrom, teamSize, applyRoster, TEAM_MESSAGE_TYPE } from "./src/session.js";
 import { MEMBERSHIP_TYPE, makeJoinRecord, makeLeaveRecord, reduceMembership } from "./src/membership.js";
 import { normalizeReplyMode } from "./src/dispatch.js";
 import { createTeam, joinTeam, leaveTeam, listTeams, readTeam, toSocketUrl, writeTeam } from "./src/team-config.js";
-import { BULK_WARN_THRESHOLD, dispatch, doSend, sendMessage } from "./src/dispatch.js";
+import { dispatch, doTransmit } from "./src/dispatch.js";
 
 // ---------------------------------------------------------------- 类型
 
@@ -198,9 +198,9 @@ async function runIntentions(
           to: it.to as string | string[],
           id: String(it.id),
           re: (it.re as string | null) ?? null,
-          // body 的组装集中在 session.sendBodyFrom:requireResponse 只把
+          // body 的组装集中在 session.transmitBodyFrom:requireResponse 只把
           // true 写进去,缺省与 false 都不写(接收方按缺省即 false 处理)。
-          body: sendBodyFrom(it),
+          body: transmitBodyFrom(it),
         });
         if (!okSent) {
           const msg = t(M.notify.sendFailed);
@@ -319,10 +319,11 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
         ctx.ui.notify(t(M.notify.cancelled), "info");
         return false;
       }
-      // 确认后走同一条发送路径,不复制逻辑
+      // 确认后走同一条发送路径(doTransmit),不复制逻辑。
+      // requireResponse 跟着确认数据一起回来,所以 ask 不会在确认后退化成 send。
       const to = party.to as string | string[];
       const local = { targets: new Array(n).fill("") as string[], unknown: [] };
-      const r = doSend(to, String(party.text), (party.origin as "user" | "model") ?? "user", local, state, envOf(), {
+      const r = doTransmit(to, String(party.text), (party.origin as "user" | "model") ?? "user", local, state, envOf(), {
         requireResponse: party.requireResponse === true,
       });
       if (!r.ok) {
@@ -338,7 +339,7 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
 
 /** dispatch + 执行。命令和工具的统一入口。 */
 async function invoke(
-  input: { sub: string; args: string[]; origin?: "user" | "model"; requireResponse?: boolean },
+  input: { sub: string; args: string[]; origin?: "user" | "model" },
   ctx: ExtensionContext,
 ) {
   ctxRef = ctx;
@@ -710,6 +711,87 @@ function connectWith(
   return true;
 }
 
+// ---------------------------------------------------------------- 发送工具(team_send / team_ask)
+
+/** 渲染回调用到的主题接口(只用到这两个方法) */
+type Theme = { fg(color: string, text: string): string; bold(text: string): string };
+
+/**
+ * team_send / team_ask 的共用部分:参数 schema、调用渲染、结果渲染、执行路径。
+ *
+ * 两者只在子命令(send 不带 requireResponse、ask 带上)与文案/指引上不同,
+ * 交付一律走 dispatch → transmit,不会出现"一边改了另一边没改"。
+ * 公开 schema 只有 to / text —— requireResponse 是私有 wire 元数据,
+ * 不再暴露给模型或用户。
+ */
+function transmitToolParams() {
+  return Type.Object({
+    to: Type.String({ description: "节点名、'@label'、'*'、'@default',或逗号分隔多收件人" }),
+    text: Type.String({ description: "消息内容:背景、期望产出、验收标准一次说清" }),
+  });
+}
+
+function renderTransmitCall(
+  name: string,
+  asks: boolean,
+  args: { to?: unknown; text?: unknown } | undefined,
+  theme: Theme,
+) {
+  const raw = String(args?.to ?? "?");
+  const bulk = raw === "*" || raw === "@default" || raw.includes(",") || raw.startsWith("@") || raw.startsWith("#");
+  const need = asks ? theme.fg("warning", ` (${t(M.tool.requireResponse)})`) : "";
+  const head =
+    theme.fg("toolTitle", theme.bold(`${name} `)) +
+    theme.fg(bulk ? "warning" : "accent", bulk ? `📢 ${raw}` : `📤 ${raw}`) +
+    need;
+  const lines = String(args?.text ?? "").split("\n");
+  let text = head + "\n" + lines.slice(0, 4).map((l) => theme.fg("muted", `  ${l}`)).join("\n");
+  if (lines.length > 4) text += "\n" + theme.fg("dim", `  ${t(M.tool.moreLines, { count: lines.length - 4 })}`);
+  return new Text(text, 0, 0);
+}
+
+function renderTransmitResult(
+  result: { details?: unknown },
+  _options: unknown,
+  theme: Theme,
+) {
+  const d = result.details as { delivered?: boolean; to?: string; error?: string } | undefined;
+  if (d?.delivered === false) {
+    return new Text(theme.fg("error", `⚠️ ${d.error ?? t(M.tool.notConnected)}`), 0, 0);
+  }
+  return new Text(theme.fg("success", t(M.tool.delivered, { to: d?.to ?? "?" })), 0, 0);
+}
+
+/**
+ * 执行路径:team_send → 子命令 "send",team_ask → 子命令 "ask"。
+ *
+ * 立即返回投递回执,**不同步等答案** —— 答案会作为一条 team 消息稍后
+ * 注入。origin:"model" 让对方回复时能判断"模型知道这回事吗"。
+ */
+function makeTransmitExecute(sub: "send" | "ask") {
+  return async (
+    _toolCallId: string,
+    params: { to: string; text: string },
+    _signal: unknown,
+    _onUpdate: unknown,
+    ctx: ExtensionContext,
+  ) => {
+    ctxRef = ctx;
+    const r = await invoke({ sub, args: [params.to, params.text], origin: "model" }, ctx);
+
+    if (!r.ok) {
+      return {
+        content: [{ type: "text", text: t(M.tool.sendFailed, { error: r.error }) }],
+        details: { delivered: false, to: params.to, error: r.error },
+      };
+    }
+    return {
+      content: [{ type: "text", text: t(M.tool.receipt, { summary: r.lines.join(" ") }) }],
+      details: { delivered: true, to: params.to },
+    };
+  };
+}
+
 // ---------------------------------------------------------------- 导出
 
 export default function (pi: ExtensionAPI) {
@@ -998,14 +1080,14 @@ export default function (pi: ExtensionAPI) {
       roster,
       labels.length ? `可用分组:${labels.map((l) => `@${l}`).join(" ")}` : "",
       "",
-      "**发送**:调用 `team_send({ to, text })`。`to` 可以是节点名、`@label`(分组)、`\"*\"`(全员)、`\"@default\"`(默认组),或数组。",
-      "**默认不要求回信**:队友消息默认只是送达并唤醒你,不要求回复;只有发送方明确要求回信(team_send 的 requireResponse: true)时才会提醒你一次。",
+      "**发送**:默认用 `team_send({ to, text })` —— 送达并唤醒对方,但不要求回信。`to` 可以是节点名、`@label`(分组)、`\"*\"`(全员)、`\"@default\"`(默认组),或数组。",
+      "**要求回信**:需要对方回话时用 `team_ask({ to, text })` —— 对方未回复会被提醒一次。它和所有工具一样立即返回投递回执,不会同步等答案;回信稍后作为一条 team 消息送到。`team_ask` 永远是一条新请求,不会算作对旧消息的回复;要回复队友请用 `team_send`。",
       "**查成员**:调用 `team_roster()`,或 `team_info({ what: \"peers\" })`。",
       "",
-      "**接收**:输入里出现 `[来自 <名字> 的 team 消息]` 前缀时,那是另一个 agent 发来的请求,不是真人打字。",
+      "**接收**:输入里出现 `[来自 <名字> 的 team 消息]` 前缀时,那是另一个 agent 发来的消息,不是真人打字。",
       "按内容本身的意思回应:是任务就执行,是讨论就接着走。不要反问「需要我做什么」。",
       "**回复要用 team_send** —— 你这一轮的输出不会自动回传。发给谁就是回复谁,不需要额外参数。",
-      "不需要回复的(纯通知、寒暄)可以不管;系统最多提醒一次,不会反复打扰。",
+      "只有对方用 team_ask 发的消息才要求回复;team_send 的通知不需要回信,也不会有提醒。",
       "",
       "**克制**:每次发送都占用对方一轮完整思考,群发更贵。除非任务需要,不要主动发消息。",
       "",
@@ -1017,76 +1099,42 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ---- 工具入口(给模型和自动化)
+  // team_send 与 team_ask 只在子命令、文案和指引上不同:参数 schema、渲染、
+  // 执行都共用同一套 helper —— 交付与群发确认路径不可能分叉。
   pi.registerTool({
     name: "team_send",
     label: "Team Send",
     description:
-      "给同一 team 里的其他 Pi 节点发消息,也用它回复收到的队友消息。to 可以是节点名、'@label' 分组、'*' 全员、'@default' 默认组,或逗号分隔的名字数组。名字从 team_roster 或系统提示的 Team 段落获取。",
-    promptSnippet: "team_send(to, text, requireResponse?) — 给一个或一组 Pi 节点发消息(也是回复队友的方式)",
+      "给同一 team 里的其他 Pi 节点发消息(默认不要求回信),也用它回复收到的队友消息。to 可以是节点名、'@label' 分组、'*' 全员、'@default' 默认组,或逗号分隔的名字数组。名字从 team_roster 或系统提示的 Team 段落获取。",
+    promptSnippet: "team_send(to, text) — 给一个或一组 Pi 节点发消息,默认不要求回信(也是回复队友的方式)",
     promptGuidelines: [
       "Use team_send only when the task spans another machine; each recipient costs a full model turn.",
-      "Messages are informational by default: they wake the peer but do NOT require a reply. Set requireResponse: true only when you actually need an answer and want the peer reminded.",
-      "Replies are NOT automatic: when a teammate's message needs an answer, call team_send to answer it. Sending back to the same peer links it to their request automatically.",
-      "You can ignore a teammate's message when no answer is needed; it will be reminded once, not repeatedly.",
+      "team_send is informational: it wakes the peer but does not ask for a reply and creates no reminder. Call team_ask when you actually need an answer.",
+      "Replies are NOT automatic: to answer a teammate, call team_send back to the same peer; it links to their message automatically.",
       "Broadcasting with '*' or '@label' wakes every matching node; prefer naming recipients.",
     ],
-    parameters: Type.Object({
-      to: Type.String({ description: "节点名、'@label'、'*'、'@default',或逗号分隔多收件人" }),
-      text: Type.String({ description: "消息内容:背景、期望产出、验收标准一次说清" }),
-      requireResponse: Type.Optional(
-        Type.Boolean({
-          default: false,
-          description:
-            "是否需要对方回信。默认 false:消息仍会送达并唤醒对方,但不要求回复、不产生提醒。设为 true 才要求对方回复;对方未回复会被提醒一次。",
-        }),
-      ),
-    }),
+    parameters: transmitToolParams(),
+    renderCall: (args, theme) => renderTransmitCall("team_send", false, args, theme),
+    renderResult: renderTransmitResult,
+    execute: makeTransmitExecute("send"),
+  });
 
-    renderCall(args, theme) {
-      const raw = String(args?.to ?? "?");
-      const bulk = raw === "*" || raw === "@default" || raw.includes(",") || raw.startsWith("@") || raw.startsWith("#");
-      const need = args?.requireResponse === true ? theme.fg("warning", ` (${t(M.tool.requireResponse)})`) : "";
-      const head =
-        theme.fg("toolTitle", theme.bold("team_send ")) +
-        theme.fg(bulk ? "warning" : "accent", bulk ? `📢 ${raw}` : `📤 ${raw}`) +
-        need;
-      const lines = String(args?.text ?? "").split("\n");
-      let text = head + "\n" + lines.slice(0, 4).map((l) => theme.fg("muted", `  ${l}`)).join("\n");
-      if (lines.length > 4) text += "\n" + theme.fg("dim", `  ${t(M.tool.moreLines, { count: lines.length - 4 })}`);
-      return new Text(text, 0, 0);
-    },
-
-    renderResult(result, _options, theme) {
-      const d = result.details as { delivered?: boolean; to?: string; error?: string } | undefined;
-      if (d?.delivered === false) {
-        return new Text(theme.fg("error", `⚠️ ${d.error ?? t(M.tool.notConnected)}`), 0, 0);
-      }
-      return new Text(theme.fg("success", t(M.tool.delivered, { to: d?.to ?? "?" })), 0, 0);
-    },
-
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      ctxRef = ctx;
-      // origin:"model" —— 对方回复时靠它判断"模型知道这回事吗"。
-      // 以前这里没传,dispatch 一律记成 "user",于是模型发出的消息被
-      // 记成人发的,对方回复时只显示一张卡片,模型永远看不到那条回复。
-      const r = await invoke({ sub: "send", args: [params.to, params.text], origin: "model", requireResponse: params.requireResponse === true }, ctx);
-
-      if (!r.ok) {
-        return {
-          content: [{ type: "text", text: t(M.tool.sendFailed, { error: r.error }) }],
-          details: { delivered: false, to: params.to, error: r.error },
-        };
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: t(M.tool.receipt, { summary: r.lines.join(" ") }),
-          },
-        ],
-        details: { delivered: true, to: params.to },
-      };
-    },
+  pi.registerTool({
+    name: "team_ask",
+    label: "Team Ask",
+    description:
+      "给同一 team 里的其他 Pi 节点发一条要求回信的消息:对方会被唤醒,如果没回复会被提醒一次。to 的写法和 team_send 相同。返回的是投递回执,不会同步等待答案 —— 回信会作为一条 team 消息稍后送到。",
+    promptSnippet: "team_ask(to, text) — 发一条要求对方回信的消息(未回复会被提醒一次)",
+    promptGuidelines: [
+      "Use team_ask only when you actually need the peer's answer; each recipient costs a full model turn and an unanswered ask is reminded once.",
+      "team_ask returns immediately with a delivery receipt — it does not wait for the answer; the reply arrives later as an injected team message.",
+      "team_ask always starts a NEW request: it is never counted as a reply to an earlier message, even from the same peer. Use team_send to answer a teammate.",
+      "A reply never asks for a reply, so conversations still end.",
+    ],
+    parameters: transmitToolParams(),
+    renderCall: (args, theme) => renderTransmitCall("team_ask", true, args, theme),
+    renderResult: renderTransmitResult,
+    execute: makeTransmitExecute("ask"),
   });
 
   pi.registerTool({
@@ -1322,7 +1370,7 @@ export default function (pi: ExtensionAPI) {
     description: t(M.command.team),
     getArgumentCompletions(prefix) {
       const subs = [
-        "status", "peers", "create", "join", "leave", "mode", "label", "send", "reply", "lang", "on", "off",
+        "status", "peers", "create", "join", "leave", "mode", "label", "send", "ask", "reply", "lang", "on", "off",
       ];
       if (!prefix.includes(" ")) {
         return subs.filter((s) => s.startsWith(prefix)).map((s) => ({ value: s, label: s, description: `/team ${s}` }));
@@ -1335,12 +1383,9 @@ export default function (pi: ExtensionAPI) {
         return ["list", "add", "remove"].filter((o) => o.startsWith(partial)).map((o) => ({ value: o, label: o }));
       }
 
-      if (sub === "send" && rest.length <= 1) {
-        if (partial.startsWith("--")) {
-          return [{ value: "--require-response", label: "--require-response", description: t(M.ui.acRequireResponse) }].filter(
-            (i) => i.value.startsWith(partial),
-          );
-        }
+      // send 与 ask 的收件人写法完全一样,共用同一份补全。
+      // 不再有 --require-response 之类的开关:是否要求回信由子命令决定。
+      if ((sub === "send" || sub === "ask") && rest.length <= 1) {
         const items = [
           { value: "@default", label: "@default", description: t(M.ui.acDefaultGroup) },
           { value: "*", label: "*", description: t(M.ui.acAll) },
@@ -1578,6 +1623,20 @@ export default function (pi: ExtensionAPI) {
 
   async function menu(ctx: ExtensionContext) {
     const list = others(state);
+
+    /**
+     * 让用户选 send 还是 ask —— 菜单里也要能发要求回信的消息,
+     * 否则 ask 只存在于命令和工具里,菜单用户无从得知。
+     * 取消返回 null。
+     */
+    const pickTransmitSub = async (): Promise<"send" | "ask" | null> => {
+      const sendOpt = t(M.ui.messageKindSend);
+      const askOpt = t(M.ui.messageKindAsk);
+      const pick = await ctx.ui.select(t(M.ui.selectMessageKind), [sendOpt, askOpt]);
+      if (!pick) return null;
+      return pick === askOpt ? "ask" : "send";
+    };
+
     const choices: { label: string; run: () => Promise<void> }[] = [
       {
         label: t(M.ui.menuViewMembers),
@@ -1599,7 +1658,9 @@ export default function (pi: ExtensionAPI) {
           if (!target) return;
           const text = await ctx.ui.input(t(M.ui.inputSendTo, { name: target.name }), t(M.ui.placeholderMessage));
           if (!text?.trim()) return;
-          const r = await invoke({ sub: "send", args: [target.name, text] }, ctx);
+          const sub = await pickTransmitSub();
+          if (!sub) return;
+          const r = await invoke({ sub, args: [target.name, text] }, ctx);
           if (!r.ok) ctx.ui.notify(r.error!, "error");
         },
       },
@@ -1622,7 +1683,9 @@ export default function (pi: ExtensionAPI) {
           const text = await ctx.ui.input(t(M.ui.inputBroadcastTo, { to }), t(M.ui.placeholderMessage));
           if (!text?.trim()) return;
 
-          const r = await invoke({ sub: "send", args: [to, text] }, ctx);
+          const sub = await pickTransmitSub();
+          if (!sub) return;
+          const r = await invoke({ sub, args: [to, text] }, ctx);
           if (!r.ok) ctx.ui.notify(r.error!, "error");
         },
       },
