@@ -286,7 +286,7 @@ export const enUS = Object.freeze({
   "command.team": "Pi Agent Team: status / members / messaging / team management / labels",
 
   "tool.sendFailed": "Send failed: {error}",
-  "tool.receipt": "{summary}. The receipt only means the peer's socket received it, not that the peer has finished processing it.",
+  "tool.receipt": "{summary}. The receipt only means the local transport accepted it, not that the peer received or processed it.",
   "tool.failed": "Failed: {error}",
 
   "ui.confirmBulkTitle_one": "Broadcast to {count} node?",

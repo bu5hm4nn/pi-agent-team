@@ -764,7 +764,9 @@ export function doTransmit(to, text, origin, local, state, env, opts = {}) {
   // (transmitBodyFrom 只取 text/hops/fyi/requireResponse),只用来把"哪条
   // 请求应被消费"交给真正把信封写出去的调用方 —— 只有 transport.send
   // 确认成功后才由 runIntentions 消费,写失败/抛异常时义务原样保留。
-  const sendIntent = { type: "send", to, id, re, text, hops, requireResponse };
+  const recipients = !isReply && (Array.isArray(to) || to === "*" || to.startsWith("@") || to.startsWith("#"))
+    ? [...local.targets] : to;
+  const sendIntent = { type: "send", to: recipients, id, re, text, hops, requireResponse };
   if (isReply) sendIntent.replyRequestId = String(opts.replyRequestId ?? re ?? "");
 
   return ok(lines, {
@@ -873,7 +875,7 @@ function replySubcommand(args, state, env, origin) {
  * index.ts 的 runIntentions 在确认写入成功后消费。
  */
 function explicitReplyResult(args, state, env, origin) {
-  const requestId = String(args[0] ?? "").trim();
+  const requestId = typeof args[0] === "string" ? args[0] : "";
   const text = args.slice(1).join(" ");
   if (!requestId || !text) return bad(t(M.dispatch.explicitReplyUsage));
 

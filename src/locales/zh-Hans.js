@@ -283,7 +283,7 @@ export const zhHans = Object.freeze({
   "command.team": "Pi Agent Team:状态 / 成员 / 发送 / team 生命周期 / 标签",
 
   "tool.sendFailed": "发送失败:{error}",
-  "tool.receipt": "{summary}。回执只表示对方 socket 收到了,不表示对方已处理完。",
+  "tool.receipt": "{summary}。回执只表示本地传输已接受,不表示对方已收到或处理。",
   "tool.failed": "失败:{error}",
 
   "ui.confirmBulkTitle_one": "群发给 {count} 个节点?",

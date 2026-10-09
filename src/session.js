@@ -21,6 +21,8 @@
  * 这样每个场景都能用几行测试覆盖,不需要起 Pi、不需要起 broker。
  */
 
+import { createHash } from "node:crypto";
+
 import { t } from "./i18n.js";
 import { M } from "./messages.js";
 
@@ -33,14 +35,8 @@ const MAX_LABELS = 8;
 /** 已发出消息的记录上限,防止长会话内存增长 */
 const OUTBOUND_CAP = 1000;
 
-/**
- * 待回复队列上限。
- *
- * 正常一次 settle 周期不会超过个位数。上限的作用是:万一 settle 永远不触发
- * (Pi 卡死、异常退出),队列不能无限增长。超限时挤掉最早的那条并出失败卡片 ——
- * 静默丢弃会让发信人一直等下去。
- */
-const MAX_PENDING_REPLIES = 32;
+/** 只限制完整提醒正文;未回复义务及正文指纹不丢弃。 */
+const MAX_PENDING_REFS = 32;
 
 // ---------------------------------------------------------------- 类型
 
@@ -56,7 +52,7 @@ const MAX_PENDING_REPLIES = 32;
  * @typedef {{ id: string, hops: number }} IncomingId
  *
  * @typedef {{ to: string, re: string, hops: number, at: number,
- *             ref: string, seen: boolean, reminded: boolean, dropped?: boolean }} PendingReply
+ *             ref: string, refHash: string, seen: boolean, reminded: boolean }} PendingReply
  *
  * @typedef {{ type: "inject", payload: string, from: string }
  *   | { type: "card", kind: "receive"|"send"|"reply"|"failed"|"fyi", peer: string, text: string, reason?: string }
@@ -386,8 +382,8 @@ export function buildPayload(from, text, cls, requestId = null) {
   // 显式回复方式(基于同一 request id),这样主动回报不会退化成新请求。
   const replyLine = requestId
     ? cls.requireResponse === true
-      ? `要回复,显式调用 team_reply({ requestId: "${requestId}", text: "..." })。`
-      : `这条消息没有要求回复,无需回信。如确需回复,可调用 team_reply({ requestId: "${requestId}", text: "..." })。`
+      ? `要回复,显式调用 team_reply({ requestId: ${JSON.stringify(requestId)}, text: "..." })。`
+      : `这条消息没有要求回复,无需回信。如确需回复,可调用 team_reply({ requestId: ${JSON.stringify(requestId)}, text: "..." })。`
     : cls.requireResponse === true
       ? `要回复,显式调用 team_reply({ text: "..." })。`
       : `这条消息没有要求回复,无需回信。`;
@@ -499,16 +495,7 @@ export function handleIncoming(s, env, now = Date.now()) {
   const actions = [{ type: "card", kind: "receive", peer: env.from, text }];
 
   if (cls.requireResponse) {
-    const dropped = rememberPending(s, { from: env.from, id: env.id, hops, ref: payload });
-    if (dropped) {
-      actions.push({
-        type: "card",
-        kind: "failed",
-        peer: dropped.to,
-        text: "",
-        reason: t(M.session.pendingOverflow, { count: MAX_PENDING_REPLIES, to: dropped.to }),
-      });
-    }
+    rememberPending(s, { from: env.from, id: env.id, hops, ref: payload });
   } else if (cls.kind === "request") {
     // 不要求回信,仍记下入站 id:模型若选择主动回复,bindRequest 要能带上 re,
     // 对端才认得出是回复而不是一条新请求。这不会产生任何提醒。
@@ -544,7 +531,8 @@ function describeUndeliverable(body) {
  */
 export function observeMessage(s, role, text, customType = null) {
   if (role === "custom" && customType === TEAM_MESSAGE_TYPE) {
-    const hit = s.pendingReplies.find((p) => p.ref === text && !p.seen);
+    const hash = createHash("sha256").update(text).digest("hex");
+    const hit = s.pendingReplies.find((p) => p.refHash === hash && !p.seen);
     if (hit) hit.seen = true;
     return;
   }
@@ -562,7 +550,7 @@ export const TEAM_MESSAGE_TYPE = "team-msg";
  *
  * ── pendingReplies 的寿命与提醒策略解耦 ──
  *   pendingReplies 是"对方要求了回信、模型还没回"的义务,它同时驱动
- *   发送阻断。它只能被**显式 team_reply** 消掉(或内存上限挤掉),不能
+ *   发送阻断。它只能被**显式 team_reply** 消掉,不能
  *   因为 reply=off / 已提醒过就觉得可以忘了 —— 那样义务会被静默丢掉,
  *   本机对同一队友的发送也不再被阻断。所以这里任何分支都不清队列。
  */
@@ -597,7 +585,7 @@ export function onTurnSettled(s) {
   }
 
   // remind:对每条未回复的请求最多提醒一次。已经提醒过的不再重复打扰,
-  // 但也不丢弃 —— 它一直留到模型用 team_reply 显式回复,或内存上限挤掉。
+  // 但也不丢弃 —— 它一直留到模型用 team_reply 显式回复。
   const actions = [];
   const online = new Set(others(s).map((m) => m.name));
 
@@ -626,17 +614,14 @@ function associateIncoming(s, from, id, hops) {
  * 以 request id(re)为键:同一队友可以同时有多条,
  * 每条都要能被 team_reply 单独回复。重复投递同一 id 不会重复入库
  * (handleIncoming 的 seen 已经挡住,这里再兜一层)。
- * 超过内存上限时挤掉最早的一条 —— 静默丢弃会让发信人一直等下去,
- * 所以调用方会为被挤掉的那条出一张失败卡片。
+ * 完整正文最多保留 32 条;旧记录只保留指纹供 observeMessage 识别。
+ * 精简后仍可按 id 提醒一次、阻断发送和精确回复。
  */
 export function rememberPending(s, { from, id, hops, ref }) {
   if (s.pendingReplies.some((p) => p.re === id)) return null;
 
-  let dropped = null;
-  if (s.pendingReplies.length >= MAX_PENDING_REPLIES) {
-    dropped = s.pendingReplies.shift();
-    dropped.dropped = true;
-  }
+  const refs = s.pendingReplies.filter((p) => p.ref);
+  if (refs.length >= MAX_PENDING_REFS) refs[0].ref = "";
 
   s.pendingReplies.push({
     to: from,
@@ -644,10 +629,11 @@ export function rememberPending(s, { from, id, hops, ref }) {
     hops,
     at: Date.now(),
     ref,
+    refHash: createHash("sha256").update(ref).digest("hex"),
     seen: false,
     reminded: false,
   });
-  return dropped;
+  return null;
 }
 
 /** 某个队友所有还没被回复的请求。 */

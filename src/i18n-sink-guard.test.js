@@ -215,8 +215,8 @@ allow("D1/backlog-20:模型可见的提示语/工具描述/系统提示片段按
   // src/session.js
   "[来自 ${from} 的 team 回复]\\n${text}\\n\\n---\\n",
   "上面是 teammate ${from} 对你的消息的回复(不是真人用户)。这是回复,不需要再回复。",
-  "要回复,显式调用 team_reply({ requestId: \"${requestId}\", text: \"...\" })。",
-  "这条消息没有要求回复,无需回信。如确需回复,可调用 team_reply({ requestId: \"${requestId}\", text: \"...\" })。",
+  "要回复,显式调用 team_reply({ requestId: ${JSON.stringify(requestId)}, text: \"...\" })。",
+  "这条消息没有要求回复,无需回信。如确需回复,可调用 team_reply({ requestId: ${JSON.stringify(requestId)}, text: \"...\" })。",
   "要回复,显式调用 team_reply({ text: \"...\" })。",
   "这条消息没有要求回复,无需回信。",
   "[来自 ${from} 的 team 请求]",
@@ -225,7 +225,7 @@ allow("D1/backlog-20:模型可见的提示语/工具描述/系统提示片段按
   "你这一轮的输出【不会】自动回传给 ${from}。${replyLine}",
   // index.ts
   "[系统] 你的消息没有送达 ${state.self}:注入失败(${reason})。请重发。",
-  "现在就回复它:team_reply({ requestId: \"${requestId}\", text: \"...\" })。",
+  "现在就回复它:team_reply({ requestId: ${JSON.stringify(requestId)}, text: \"...\" })。",
   "现在就回复它:team_reply({ requestId: \"<注入消息里的 id>\", text: \"...\" })。",
   "[team 待回复]${who.join(\", \")} 之前发来的请求还没有回复。",
   "${how}如果本来就不需要回复,忽略这条即可。\\n\\n${payload}",
