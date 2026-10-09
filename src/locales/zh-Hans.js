@@ -18,6 +18,7 @@ export const zhHans = Object.freeze({
   "notify.files_one": "{count} 个文件",
   "notify.files_other": "{count} 个文件",
   "notify.sendFailed": "team:未连接,消息没发出去",
+  "notify.sendError": "team:发送失败 —— {reason}",
   "notify.injectFailed": "team:注入失败 {reason}",
   "notify.remindFailed": "team:提醒失败 {reason}",
   "notify.cancelled": "已取消",

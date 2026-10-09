@@ -33,7 +33,7 @@ import { createBrokerTransport, CLOSE_REPLACED } from "./src/transport.js";
 import { setLocale, getLocale, resolveLocale, resolveLocaleInfo, startupLocaleEnv, classifyLocale, SUPPORTED_LOCALES, t } from "./src/i18n.js";
 import { M } from "./src/messages.js";
 import { MODES, createTransport, modeReadiness, normalizeSeeds, resolveMode } from "./src/mode.js";
-import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, transmitBodyFrom, teamSize, applyRoster, TEAM_MESSAGE_TYPE } from "./src/session.js";
+import { createSessionState, handleIncoming, knownLabels, newId, onTurnSettled, observeMessage, others, transmitBodyFrom, teamSize, applyRoster, consumeRequest, TEAM_MESSAGE_TYPE } from "./src/session.js";
 import { normalizeReplyMode } from "./src/dispatch.js";
 import { createTeam, joinTeam, leaveTeam, listTeams, readTeam, toSocketUrl, writeTeam } from "./src/team-config.js";
 import { dispatch, doTransmit } from "./src/dispatch.js";
@@ -150,14 +150,26 @@ async function notifyInjectFailure(from: string, reason: string, ctx: ExtensionC
 }
 
 /**
+ * 一条 send 意图在**真实写入**失败时留下的记录。tool/命令层靠它把
+ * delivered:true 报成失败,并让显式回复的待回复义务保持不动。
+ */
+type SendFailure = { to: string | string[]; requestId: string | null; error: string };
+type IntentOutcome = { notes: string[]; failures: SendFailure[] };
+
+/**
  * 执行 dispatch 产出的意图。这是唯一的"意图 → 副作用"映射点,
  * 两个入口共用,所以行为不可能分叉。
+ *
+ * 返回值带上 failures:send 意图的 transport.send 返回 false 或抛异常时,
+ * 调用方(invoke)必须把这次操作当成失败 —— 不能对没写出去的消息报
+ * delivered:true。显式回复的消费也只发生在确认写入成功之后。
  */
 async function runIntentions(
   intentions: Array<Record<string, unknown>>,
   ctx: ExtensionContext,
-): Promise<string[]> {
+): Promise<IntentOutcome> {
   const notes: string[] = [];
+  const failures: SendFailure[] = [];
 
   for (const it of intentions) {
     switch (it.type) {
@@ -183,19 +195,40 @@ async function runIntentions(
         // 契约:send 意图用顶层 text / hops / to / id / re。
         // 之前的 bug 是 index.ts 读 it.body 而 session.js 给 it.text,
         // 于是自动回信发出一个没有 body 的信封,被 broker 判为畸形。
-        const okSent = transport?.send({
-          to: it.to as string | string[],
-          id: String(it.id),
-          re: (it.re as string | null) ?? null,
-          // body 的组装集中在 session.transmitBodyFrom:requireResponse 只把
-          // true 写进去,缺省与 false 都不写(接收方按缺省即 false 处理)。
-          body: transmitBodyFrom(it),
-        });
-        if (!okSent) {
-          const msg = t(M.notify.sendFailed);
-          notes.push(msg);
-          ctx.ui.notify(msg, "error");
+        //
+        // transport.send 返回 false 或抛异常都算写入失败:记成 failure,
+        // 通知本机,并**不**消费任何待回复(下面只在成功分支消费)。
+        let okSent = false;
+        let threw: string | null = null;
+        try {
+          okSent = transport?.send({
+            to: it.to as string | string[],
+            id: String(it.id),
+            re: (it.re as string | null) ?? null,
+            // body 的组装集中在 session.transmitBodyFrom:requireResponse 只把
+            // true 写进去,缺省与 false 都不写(接收方按缺省即 false 处理)。
+            body: transmitBodyFrom(it),
+          }) === true;
+        } catch (err) {
+          threw = (err as Error)?.message ?? String(err);
         }
+
+        if (okSent) {
+          // 只有显式回复的意图带 replyRequestId。写入确认成功后才消费
+          // 匹配的那一条 —— 同一队友的其它待回复不受影响。
+          const requestId = it.replyRequestId ? String(it.replyRequestId) : null;
+          if (requestId) consumeRequest(state, requestId);
+          break;
+        }
+
+        const msg = threw ? t(M.notify.sendError, { reason: threw }) : t(M.notify.sendFailed);
+        notes.push(msg);
+        ctx.ui.notify(msg, "error");
+        failures.push({
+          to: it.to as string | string[],
+          requestId: it.replyRequestId ? String(it.replyRequestId) : null,
+          error: msg,
+        });
         break;
       }
 
@@ -249,15 +282,19 @@ async function runIntentions(
     }
   }
 
-  return notes;
+  return { notes, failures };
 }
 
 /**
  * 处理 dispatch 返回的 party(生命周期动作)。
  * 这些动作需要连接管理,不属于意图执行。
  */
-async function runParty(party: Record<string, unknown> | undefined, ctx: ExtensionContext): Promise<boolean> {
-  if (!party) return true;
+async function runParty(
+  party: Record<string, unknown> | undefined,
+  ctx: ExtensionContext,
+): Promise<{ proceeded: boolean } & IntentOutcome> {
+  const done = { proceeded: true, notes: [] as string[], failures: [] as SendFailure[] };
+  if (!party) return done;
 
   switch (party.kind) {
     case "connect":
@@ -266,7 +303,7 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
         party.config as { url: string; token: string; labels?: string[] },
         (party.session as { name?: string; labels?: string[]; port?: number; listen?: string }) ?? {},
       );
-      return true;
+      return done;
 
     case "disconnect":
       transport?.stop();
@@ -275,12 +312,12 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
       currentTeam = null;
       currentConfig = null;
       renderStatus();
-      return true;
+      return done;
 
     case "reconnect": {
       const labels = party.labels as string[];
       if (transport && currentConfig) connectWith(currentTeam, { ...currentConfig, labels });
-      return true;
+      return done;
     }
 
     case "confirmBulk": {
@@ -291,7 +328,7 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
       );
       if (!proceed) {
         ctx.ui.notify(t(M.notify.cancelled), "info");
-        return false;
+        return { proceeded: false, notes: [], failures: [] };
       }
       // 确认后走同一条发送路径(doTransmit),不复制逻辑。
       // requireResponse 与 targets 跟着确认数据一起回来:ask 不会在确认后
@@ -305,13 +342,14 @@ async function runParty(party: Record<string, unknown> | undefined, ctx: Extensi
       });
       if (!r.ok) {
         ctx.ui.notify(r.error!, "error");
-        return false;
+        return { proceeded: false, notes: [], failures: [{ to, requestId: null, error: r.error! }] };
       }
-      await runIntentions(r.intentions ?? [], ctx);
-      return true;
+      // 确认后自己跑意图;写入失败必须传回 invoke,不能静默吞掉。
+      const outcome = await runIntentions(r.intentions ?? [], ctx);
+      return { proceeded: outcome.failures.length === 0, ...outcome };
     }
   }
-  return true;
+  return done;
 }
 
 /** dispatch + 执行。命令和工具的统一入口。 */
@@ -324,15 +362,21 @@ async function invoke(
 
   if (!r.ok) return { ok: false, lines: [] as string[], error: r.error!, notes: [] as string[] };
 
-  const proceeded = await runParty(r.party, ctx);
+  const partyResult = await runParty(r.party, ctx);
 
-  // confirmBulk 被取消时,party 已经处理过 intentions,不要再执行一次
-  const notes = r.party?.kind === "confirmBulk"
-    ? []
+  // confirmBulk 时 party 已经执行过 intentions,不要再执行一次
+  const outcome = r.party?.kind === "confirmBulk"
+    ? { notes: partyResult.notes, failures: partyResult.failures }
     : await runIntentions(r.intentions ?? [], ctx);
 
   renderStatus();
-  return { ok: proceeded, lines: r.lines, error: undefined, notes };
+
+  // 真实写入失败时整次操作报失败 —— 尤其不能对写失败的显式回复报
+  // delivered:true。命令/工具层的错误信息直接用第一条失败。
+  if (outcome.failures.length) {
+    return { ok: false, lines: [] as string[], error: outcome.failures[0].error, notes: outcome.notes };
+  }
+  return { ok: partyResult.proceeded, lines: r.lines, error: undefined, notes: outcome.notes };
 }
 
 // ---------------------------------------------------------------- 卡片 / 状态栏
@@ -1440,7 +1484,7 @@ export default function (pi: ExtensionAPI) {
                   pending.map((p) => `${p.re}  —  ${p.to}`),
                 );
                 if (!pick) return;
-                const req = pending.find((p) => pick.startsWith(p.re));
+                const req = pending.find((p) => pick === `${p.re}  —  ${p.to}`);
                 if (!req) return;
                 const text = await ctx.ui.input(t(M.ui.inputReplyText, { peer: req.to }), t(M.ui.placeholderMessage));
                 if (!text?.trim()) return;

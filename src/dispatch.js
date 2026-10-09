@@ -16,7 +16,6 @@
 import {
   bindRequest,
   blockedTargets,
-  consumeRequest,
   knownLabels,
   others as othersOf,
   parseRecipients,
@@ -694,13 +693,20 @@ export function doTransmit(to, text, origin, local, state, env, opts = {}) {
   if (isReply) lines.push(t(M.dispatch.explicitReplySent, { id: re }));
   else if (requireResponse) lines.push(t(M.dispatch.sendAwaitReply));
 
+  // 显式回复的 send 意图带一个**私有**字段 replyRequestId。它不进信封
+  // (transmitBodyFrom 只取 text/hops/fyi/requireResponse),只用来把"哪条
+  // 请求应被消费"交给真正把信封写出去的调用方 —— 只有 transport.send
+  // 确认成功后才由 runIntentions 消费,写失败/抛异常时义务原样保留。
+  const sendIntent = { type: "send", to, id, re, text, hops, requireResponse };
+  if (isReply) sendIntent.replyRequestId = String(opts.replyRequestId ?? re ?? "");
+
   return ok(lines, {
     intentions: [
       // 契约(与 session.js 一致):send 意图用**顶层** text / hops,
       // 由 index.ts 组装成信封的 body。
       // 曾经一边写 body:{text} 一边读 it.text,导致 /team send 发出
       // 空正文的消息 —— 对方只看到空字符串,症状是"投递成功但对方没反应"。
-      { type: "send", to, id, re, text, hops, requireResponse },
+      sendIntent,
       { type: "card", kind: isReply ? "reply" : "send", peer: formatTarget(to), text },
     ],
   });
@@ -794,6 +800,10 @@ function replySubcommand(args, state, env, origin) {
  *
  * 只有本地校验 + 连接都通过、真的产出了发送意图之后才消费匹配的那一条
  * (离线/超长时保留义务,不提前消费)。同一队友的其它请求不受影响。
+ *
+ * 注意:真正的消费不在这里 —— dispatch 不知道 transport.send 的结果。
+ * 这里只把 request id 写进 send 意图的私有字段 replyRequestId,由
+ * index.ts 的 runIntentions 在确认写入成功后消费。
  */
 function explicitReplyResult(args, state, env, origin) {
   const requestId = String(args[0] ?? "").trim();
@@ -808,9 +818,10 @@ function explicitReplyResult(args, state, env, origin) {
     kind: "reply",
     re: bound.re,
     hops: bound.hops,
+    // 不在 dispatch 里消费:把 request id 交给调用方,只有 transport.send
+    // 确认成功后才消费。dispatch 不知道真实写入结果,提前消费会在写失败
+    // 时把义务弄丢(且发送阻断失效)。
+    replyRequestId: requestId,
   });
-
-  // 成功产出发送意图后才消费;失败(离线/超长)则原样保留义务。
-  if (r.ok) consumeRequest(state, requestId);
   return r;
 }

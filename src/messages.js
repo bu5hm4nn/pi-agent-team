@@ -20,6 +20,7 @@ const notify = Object.freeze({
   greeting: "notify.greeting",
   files: "notify.files",
   sendFailed: "notify.sendFailed",
+  sendError: "notify.sendError",
   injectFailed: "notify.injectFailed",
   remindFailed: "notify.remindFailed",
   cancelled: "notify.cancelled",

@@ -729,7 +729,7 @@ test("send:没有待回复时照常作为新消息发出(re 为空,不自动关�
  * 原发信人"、"只消费匹配那一那一条"、"未知/过期 id 不发不消费"、
  * "离线/校验失败保留义务"定死。
  */
-test("reply:按 request id 精确回复原发信人,并只消费匹配的那一条", async () => {
+test("reply:按 request id 精确回复原发信人,意图带私有 replyRequestId(消费交给调用方)", async () => {
   const { rememberPending } = await import("./session.js");
   const c = setup({ peers: [member("peer")] });
   rememberPending(c.state, { from: "peer", id: "req-1", hops: 2, ref: "p" });
@@ -741,24 +741,24 @@ test("reply:按 request id 精确回复原发信人,并只消费匹配的那一�
   assert.equal(send.re, "req-1");
   assert.equal(send.hops, 3, "跳数在原请求上 +1");
   assert.equal(send.requireResponse, false, "回复不再要求对方回信");
-  assert.equal(c.state.pendingReplies.length, 0, "成功发出发出后消费匹配的那一条");
+  assert.equal(send.replyRequestId, "req-1", "私有字段告诉调用方该消费哪一条");
+  assert.equal(c.state.pendingReplies.length, 1, "dispatch 不消费 —— 只有写入成功后才由 runIntentions 消费");
   assert.ok(r.lines.some((l) => /req-1/.test(l)), "结果要回显回复的 id");
 });
 
-test("reply:同一队友两条待回复各自独立可回,不互相顶掉", async () => {
-  const { rememberPending } = await import("./session.js");
+test("reply:同一队友两条待回复各自独立,意图各带自己的 replyRequestId", async () => {
+  const { rememberPending, consumeRequest } = await import("./session.js");
   const c = setup();
   rememberPending(c.state, { from: "peer", id: "req-a", hops: 0, ref: "a" });
   rememberPending(c.state, { from: "peer", id: "req-b", hops: 0, ref: "b" });
 
   const a = dispatch({ sub: "reply", args: ["req-a", "answer a"], origin: "model" }, c.state, c.env);
   assert.equal(a.ok, true, a.error);
+  assert.equal(a.intentions.find((i) => i.type === "send").replyRequestId, "req-a");
+  assert.equal(c.state.pendingReplies.length, 2, "dispatch 不提前消费");
+  consumeRequest(c.state, "req-a");
   assert.equal(c.state.pendingReplies.length, 1, "只清 req-a");
   assert.equal(c.state.pendingReplies[0].re, "req-b");
-
-  const b = dispatch({ sub: "reply", args: ["req-b", "answer b"], origin: "model" }, c.state, c.env);
-  assert.equal(b.ok, true, b.error);
-  assert.equal(c.state.pendingReplies.length, 0);
 });
 
 test("reply:缺 requestId / 正文时报用法,不发也不消费", () => {
@@ -794,7 +794,8 @@ test("reply:离线时保留义务,不提前消费", async () => {
   assert.equal(c.state.pendingReplies.length, 1, "离线失败不能提前消费义务");
 });
 
-test("reply:可选回复未要求回信的入站消息(不产生/不消费待回复)", () => {
+test("reply:可选回复未要求回信的入站消息(意图带 id,关联由调用方消费)", async () => {
+  const { consumeRequest } = await import("./session.js");
   const c = setup();
   c.state.incomingIds.set("peer", { id: "note-9", hops: 1 });
 
@@ -804,7 +805,10 @@ test("reply:可选回复未要求回信的入站消息(不产生/不消费待回
   assert.equal(send.to, "peer");
   assert.equal(send.re, "note-9");
   assert.equal(send.hops, 2);
-  assert.equal(c.state.incomingIds.has("peer"), false, "关联一次性消费");
+  assert.equal(send.replyRequestId, "note-9");
+  assert.equal(c.state.incomingIds.has("peer"), true, "dispatch 不提前消费关联");
+  consumeRequest(c.state, "note-9");
+  assert.equal(c.state.incomingIds.has("peer"), false, "成功发出后由调用方一次性消费");
 });
 
 test("reply:命令路径记 origin=user,工具路径记 origin=model", async () => {
@@ -1029,10 +1033,14 @@ test("send/ask 不再自动消费可选入站关联(回复只能用 team_reply)"
   assert.equal(ask.intentions.find((i) => i.type === "send").re, null);
   assert.equal(c.state.incomingIds.get("peer").id, "note-1", "ask 也不消费关联");
 
-  // 唯一能消费它的是显式 team_reply
+  // 唯一能消费它的是显式 team_reply(消费发生在写入成功之后,不在 dispatch)
+  const { consumeRequest } = await import("./session.js");
   const rep = run("reply", ["note-1", "回答通知"], c);
   assert.equal(rep.intentions.find((i) => i.type === "send").re, "note-1");
-  assert.equal(c.state.incomingIds.has("peer"), false, "显式回复才消费关联");
+  assert.equal(rep.intentions.find((i) => i.type === "send").replyRequestId, "note-1");
+  assert.equal(c.state.incomingIds.has("peer"), true, "dispatch 不提前消费关联");
+  consumeRequest(c.state, "note-1");
+  assert.equal(c.state.incomingIds.has("peer"), false, "成功发出后由调用方消费关联");
 });
 
 test("ask:命令路径同样被阻断(/team ask)", async () => {

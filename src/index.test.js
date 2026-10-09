@@ -33,7 +33,7 @@ const TRANSPORT_SUFFIX = "/src/transport.js";
 const TYPEBOX_SUFFIX = "/typebox/index.js";
 
 /** fake transport 把每次投递记在这里,测试直接读。 */
-globalThis.__piTeamHarness = { sent: [], messages: [] };
+globalThis.__piTeamHarness = { sent: [], attempts: [], messages: [], sendResult: true, sendThrows: false };
 const harness = globalThis.__piTeamHarness;
 
 const FAKE_TYPEBOX = `
@@ -70,7 +70,14 @@ export function createBrokerTransport() {
       ]);
     },
     stop() {},
-    send(env) { globalThis.__piTeamHarness.sent.push(env); return true; },
+    send(env) {
+      const h = globalThis.__piTeamHarness;
+      h.attempts.push(env);
+      if (h.sendThrows) throw new Error("socket write failed");
+      if (h.sendResult === false) return false;
+      h.sent.push(env);
+      return true;
+    },
     state() { return "online"; },
     members() { return []; },
     port() { return 19801; },
@@ -337,7 +344,7 @@ test("menu:有待回复的请求时菜单出现 team_reply 入口", { skip: SKIP
         assert.ok(reply, `菜单应包含待回复入口:${options.join(" | ")}`);
         return reply;
       }
-      if (title === t(M.ui.selectReplyPending)) return "req-menu";
+      if (title === t(M.ui.selectReplyPending)) return options.find((o) => o.startsWith("req-menu"));
       return undefined;
     },
     input: async () => "菜单回的",
@@ -403,4 +410,147 @@ test("tool:对待回复的队友 send/ask 被阻断,无关节点可用,team_repl
   const afterRes = await tools.get("team_send").execute("k5", { to: "peer", text: "现在可以了" }, undefined, undefined, ctx);
   assert.equal(afterRes.details.delivered, true);
   assert.equal(harness.sent[2].re, null);
+});
+
+// ---------------------------------------------------------------- 真实写入失败:义务保留
+
+/**
+ * 评审修复点:待回复只能在 transport.send **确认成功** 后消费。
+ * transport.send 返回 false 或抛异常时,delivered 必须是 false,义务原样
+ * 保留(仍阻断对同一队友的 send/ask),重试成功才清且只清匹配的那一条。
+ */
+test("tool:team_reply 写失败(返回 false)→ delivered false、义务保留、仍阻断、重试成功才清", { skip: SKIP }, async () => {
+  const { tools, ctx } = await build();
+  const tr = harness.transport;
+  harness.sendResult = true;
+  harness.sendThrows = false;
+  harness.sent.length = 0;
+  harness.attempts.length = 0;
+
+  tr.emit("envelope", { from: "peer", id: "req-write-false", re: null, body: { text: "请回复", hops: 0, requireResponse: true } });
+
+  harness.sendResult = false;
+  const fail = await tools.get("team_reply").execute("w1", { requestId: "req-write-false", text: "回你" }, undefined, undefined, ctx);
+  assert.equal(fail.details.delivered, false, "写失败不能报 delivered:true");
+  assert.match(fail.content.map((c) => c.text).join(""), /not sent|没发出去/, "要给出本地化的失败信息");
+  assert.equal(harness.sent.length, 0, "没有成功写入");
+  assert.equal(harness.attempts.length, 1, "尝试写了一次");
+  assert.equal(harness.attempts[0].re, "req-write-false");
+
+  // 义务保留 → 对 peer 的 send 仍被阻断
+  const blocked = await tools.get("team_send").execute("w2", { to: "peer", text: "新消息" }, undefined, undefined, ctx);
+  assert.equal(blocked.details.delivered, false, "写失败后义务保留,仍阻断");
+  assert.match(blocked.content.map((c) => c.text).join(""), /req-write-false/);
+
+  // 重试成功 → delivered true,且精确清掉该义务
+  harness.sendResult = true;
+  const retry = await tools.get("team_reply").execute("w3", { requestId: "req-write-false", text: "再回你" }, undefined, undefined, ctx);
+  assert.equal(retry.details.delivered, true, retry.content.map((c) => c.text).join(""));
+  assert.equal(harness.sent.length, 1);
+  assert.equal(harness.sent[0].re, "req-write-false");
+
+  const after = await tools.get("team_send").execute("w4", { to: "peer", text: "现在可以" }, undefined, undefined, ctx);
+  assert.equal(after.details.delivered, true, "清掉后不再阻断");
+});
+
+test("tool:team_reply 写抛异常 → 安全失败、本地化错误、义务保留", { skip: SKIP }, async () => {
+  const { tools, ctx } = await build();
+  const tr = harness.transport;
+  harness.sendResult = true;
+  harness.sendThrows = false;
+  harness.sent.length = 0;
+  harness.attempts.length = 0;
+
+  tr.emit("envelope", { from: "peer", id: "req-write-throw", re: null, body: { text: "请回复", hops: 0, requireResponse: true } });
+
+  harness.sendThrows = true;
+  const fail = await tools.get("team_reply").execute("t1", { requestId: "req-write-throw", text: "回你" }, undefined, undefined, ctx);
+  assert.equal(fail.details.delivered, false, "抛异常也要当成失败");
+  assert.match(fail.content.map((c) => c.text).join(""), /sending failed|发送失败/, "异常也要本地化成可读错误");
+  harness.sendThrows = false;
+
+  const blocked = await tools.get("team_send").execute("t2", { to: "peer", text: "新消息" }, undefined, undefined, ctx);
+  assert.equal(blocked.details.delivered, false);
+  assert.match(blocked.content.map((c) => c.text).join(""), /req-write-throw/, "义务必须保留");
+
+  const retry = await tools.get("team_reply").execute("t3", { requestId: "req-write-throw", text: "再回你" }, undefined, undefined, ctx);
+  assert.equal(retry.details.delivered, true, "重试应能清掉义务");
+});
+
+test("tool:可选回复(未要求回信)写失败也保留关联,成功才消费", { skip: SKIP }, async () => {
+  const { tools, ctx } = await build();
+  const tr = harness.transport;
+  harness.sendResult = true;
+  harness.sendThrows = false;
+  harness.sent.length = 0;
+
+  tr.emit("envelope", { from: "peer", id: "note-write-opt", re: null, body: { text: "通知", hops: 0 } });
+
+  harness.sendResult = false;
+  const fail = await tools.get("team_reply").execute("o1", { requestId: "note-write-opt", text: "收到" }, undefined, undefined, ctx);
+  assert.equal(fail.details.delivered, false, "写的失败也要报失败");
+
+  harness.sendResult = true;
+  const retry = await tools.get("team_reply").execute("o2", { requestId: "note-write-opt", text: "收到" }, undefined, undefined, ctx);
+  assert.equal(retry.details.delivered, true, "失败后关联保留,重试应能成功");
+
+  const again = await tools.get("team_reply").execute("o3", { requestId: "note-write-opt", text: "再回" }, undefined, undefined, ctx);
+  assert.equal(again.details.delivered, false, "成功后关联一次性消费,再回是未知 id");
+});
+
+test("tool:群发确认后写失败 → delivered false(错误传播一致)", { skip: SKIP }, async () => {
+  const { tools, ctx } = await build();
+  const tr = harness.transport;
+  harness.sendResult = true;
+  harness.sendThrows = false;
+
+  // 动态 import:静态 import 会在 registerHooks 之前加载 transport.js,
+  // 让 hook 失效(实测会把假 transport 换成真的)。阈值是 5。
+  const { BULK_WARN_THRESHOLD } = await import("./dispatch.js");
+  const bulk = Array.from({ length: BULK_WARN_THRESHOLD + 1 }, (_, i) => ({ name: `bp${i}`, host: null, addr: null, labels: [], since: 0 }));
+  tr.emit("membership", [{ name: "me", host: null, addr: null, labels: [], since: 0 }, ...bulk]);
+  harness.sent.length = 0;
+  harness.attempts.length = 0;
+
+  harness.sendResult = false;
+  const res = await tools.get("team_send").execute("b1", { to: "@default", text: "群发" }, undefined, undefined, ctx);
+  assert.equal(res.details.delivered, false, "确认群发写失败也要报失败,不能静默成功");
+  assert.equal(harness.attempts.length, 1, "只尝试了一次(整组一条意图)");
+  assert.equal(harness.sent.length, 0);
+  harness.sendResult = true;
+
+  // 恢复 roster,避免影响后续测试
+  tr.emit("membership", [
+    { name: "me", host: null, addr: null, labels: [], since: 0 },
+    { name: "peer", host: "dev01", addr: null, labels: ["web"], since: 0 },
+    { name: "other", host: "dev02", addr: null, labels: [], since: 0 },
+  ]);
+});
+
+test("menu:request id 前缀不互相误配(精确匹配)", { skip: SKIP }, async () => {
+  const { commands, ctx } = await build();
+  const tr = harness.transport;
+  harness.sendResult = true;
+  harness.sendThrows = false;
+  harness.sent.length = 0;
+
+  // 两条 id 互为前缀:短的必须不能抢长的
+  tr.emit("envelope", { from: "peer", id: "m-prefix-1", re: null, body: { text: "a", hops: 0, requireResponse: true } });
+  tr.emit("envelope", { from: "peer", id: "m-prefix-10", re: null, body: { text: "b", hops: 0, requireResponse: true } });
+
+  const menuCtx = fakeCtx({
+    select: async (title, options) => {
+      if (title === "Pi Agent Team") return options.find((o) => /pending request/i.test(o));
+      if (title === t(M.ui.selectReplyPending)) return "m-prefix-10  —  peer";
+      return undefined;
+    },
+    input: async () => "回第二条",
+  });
+  await commands.get("team").handler("", menuCtx);
+  assert.equal(harness.sent.length, 1);
+  assert.equal(harness.sent[0].re, "m-prefix-10", "更长的 id 不能被更短的前缀误配");
+
+  // 清理剩下那条
+  const { tools } = await build();
+  await tools.get("team_reply").execute("mp-clean", { requestId: "m-prefix-1", text: "x" }, undefined, undefined, ctx);
 });

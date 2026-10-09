@@ -21,6 +21,7 @@ export const enUS = Object.freeze({
   "notify.files_one": "{count} file",
   "notify.files_other": "{count} files",
   "notify.sendFailed": "team: not connected, the message was not sent",
+  "notify.sendError": "team: sending failed — {reason}",
   "notify.injectFailed": "team: failed to add the message to the model context: {reason}",
   "notify.remindFailed": "team: reminder failed: {reason}",
   "notify.cancelled": "Canceled",
