@@ -188,7 +188,8 @@ request is checked:
 A pending request is never dropped just because it was reminded once or because
 reminders are off: it is an obligation, and it keeps blocking new `team_send` /
 `team_ask` to that peer until `team_reply` answers it. It only leaves the queue
-when answered explicitly or displaced by the bounded queue. A peer that is
+when answered explicitly. Only full reminder payloads are bounded; unanswered
+request IDs and routing metadata are retained. A peer that is
 offline is skipped (there is nowhere to send a reminder) but its request is kept
 for when it returns.
 
@@ -424,8 +425,9 @@ cd swim && go build -o ../.tmp/swim-sidecar . && cd .. && npm test
   for the old `409 Conflict` behaviour.
 - **No offline queue.** A message to an offline node is refused immediately with
   `undeliverable`. Silent queueing makes "did they get it?" unknowable.
-- **No delivery receipts beyond "written to the peer's socket."** A successful
-  send does not mean the peer's model processed it.
+- **Success means local transport acceptance, not recipient receipt.** A
+  successful transmission does not prove delivery or that the peer's model
+  processed it.
 - **The roster is global.** All nodes are in one team; there are no rooms.
 - **Labels are a convention.** Nothing checks that `@web` means the same thing
   on every node.
