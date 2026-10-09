@@ -78,7 +78,9 @@ const newId = () => `m-${Date.now().toString(36)}-${PROC_TAG}-${(idSeq++).toStri
 /**
  * 主分发。
  *
- * @param {{ sub: string, args: string[] }} input
+ * @param {{ sub: string, args: string[], origin?: "user"|"model" }} input
+ *   子命令 send / ask 共用同一条发送路径;origin 区分人发的(/team)与
+ *   模型发的(team_send / team_ask)。
  * @param {import("./session.js").SessionState} state  读写:只改 reply / selfLabels / outbound
  * @param {{ connState: string, team: string|null, config: {url,token,labels?}|null, host?: string }} env
  * @returns {Result}
@@ -111,7 +113,12 @@ export function dispatch(input, state, env) {
 
     case "send":
     case "say":
-      return sendResult(args, state, env, input);
+      return transmitResult(args, state, env, "send", input.origin);
+
+    // ask 是同一条发送路径,只是信封上带 requireResponse: 对方会被要求
+    // 回信,未回复时提醒一次。send 不带标志 —— 送达并唤醒,但不要求回复。
+    case "ask":
+      return transmitResult(args, state, env, "ask", input.origin);
 
     // reply 是现在的名字;announce 保留为别名,免得已有的肌肉记忆失效
     case "reply":
@@ -521,40 +528,31 @@ function labelResult(args, state, env) {
   return bad(t(M.dispatch.labelUsage));
 }
 
-// ---------------------------------------------------------------- send
+// ---------------------------------------------------------------- send / ask
 
-function sendResult(args, state, env, input = {}) {
-  // 命令行的 --require-response 是一个**前缀**开关:它必须在收件人之前,
-  // 这样正文里出现同样的字样不会被误吞(/team send peer --require-response
-  // 的正文就是 "--require-response")。工具路径通过 input.requireResponse 传布尔。
-  const rest = Array.isArray(args) ? [...args] : [];
-  let requireResponse = input.requireResponse === true;
-  while (rest[0] === "--require-response") {
-    requireResponse = true;
-    rest.shift();
-  }
-
-  const rawTo = rest[0];
-  const text = rest.slice(1).join(" ");
-  if (!rawTo || !text) return bad(t(M.dispatch.sendUsage));
+function transmitResult(args, state, env, sub, origin) {
+  const rawTo = args[0];
+  const text = args.slice(1).join(" ");
+  if (!rawTo || !text) return bad(t(M.dispatch.sendUsage, { sub }));
 
   // origin 以前写死成 "user",连 team_send 工具也是 —— 于是模型发出的消息
   // 被记成人发的,对方回复时只显示卡片,模型永远看不到那条回复。
   // 工具路径在 index.ts 里传 origin:"model"。
-  const origin = input.origin === "model" ? "model" : "user";
-  return sendMessage(rawTo, text, origin, state, env, { requireResponse });
+  const sender = origin === "model" ? "model" : "user";
+  return transmit(rawTo, text, sender, state, env, { requireResponse: sub === "ask" });
 }
 
 /**
- * 发送的实际执行 —— command 和 tool 共用这一条路径。
+ * 发送的实际执行 —— command 和 tool(team_send / team_ask)共用这一条路径。
  *
  * 群发超过阈值时不直接发,返回 confirmBulk 让上层决定怎么问:
  * 命令走 confirm 对话框,工具走结构化返回让模型自己判断。
  *
  * requireResponse 必须跟着 party 一起返回,否则用户确认后那一步会丢标
- * 志 —— 确认后的 doSend 拿不到它,要求回信就静默消失了。
+ * 志 —— 确认后的 doTransmit 拿不到它,要求回信就静默消失了。它也是
+ * 区分 send 与 ask 的唯一内部标志(公开入口已不再暴露这个布尔)。
  */
-export function sendMessage(rawTo, text, origin, state, env, opts = {}) {
+export function transmit(rawTo, text, origin, state, env, opts = {}) {
   const requireResponse = opts.requireResponse === true;
   const to = parseRecipients(rawTo);
   const local = resolveLocal(state, to);
@@ -583,7 +581,7 @@ export function sendMessage(rawTo, text, origin, state, env, opts = {}) {
     );
   }
 
-  return doSend(to, text, origin, local, state, env, { requireResponse });
+  return doTransmit(to, text, origin, local, state, env, { requireResponse });
 }
 
 /**
@@ -612,7 +610,7 @@ export function oversizeBy(text) {
   return total > frameLimit ? { bytes, limit: frameLimit, total } : null;
 }
 
-export function doSend(to, text, origin, local, state, env, opts = {}) {
+export function doTransmit(to, text, origin, local, state, env, opts = {}) {
   // 先查体积再查连接:超长是本地就能判断的问题,不该依赖连接状态
   const over = oversizeBy(text);
   if (over) {

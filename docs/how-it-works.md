@@ -59,13 +59,13 @@ status` says so rather than pretending otherwise.
 ## Message shapes
 
 ```
-A → B   request   (no re, no requireResponse)
+A → B   notice    (no re, no requireResponse)        sent with team_send
           B's model sees it and is woken; no answer is expected
 
-A → B   request   (no re, requireResponse: true)
+A → B   request   (no re, requireResponse: true)     sent with team_ask
           B's model sees it and is asked to answer; reminded once if it does not
 
-B → A   reply     (re = A's request id)
+B → A   reply     (re = A's request id)              sent with team_send
           A's model sees it. Nothing is sent back, so the exchange ends.
 ```
 
@@ -73,18 +73,19 @@ Rules, covered by tests:
 
 | Inbound | Action |
 |---|---|
-| Request without `requireResponse` (default) | Deliver and wake the model; **no reply expected**, no reminder |
-| Request with `requireResponse: true` | Deliver and wake the model; reply expected, reminded once if unanswered |
+| Request sent with `team_send` (no `requireResponse`, default) | Deliver and wake the model; **no reply expected**, no reminder |
+| Request sent with `team_ask` (`requireResponse: true`) | Deliver and wake the model; reply expected, reminded once if unanswered |
 | Reply to something the **model** sent | Deliver, with the original quoted; no reply expected |
 | Reply to something **you** sent via `/team send` | Card only — the model never saw your message, so waking it would confuse it |
 | Reply whose original is unknown (e.g. after a restart) | Deliver; no reply expected |
 | `fyi` broadcast (`reply=mirror`) | Card only |
 
-`requireResponse` lives on the message, not in the config, and defaults to
-false: an ordinary `team_send` delivers and wakes the peer but does not ask for
-an answer. Only `requireResponse: true` (or `/team send --require-response`)
-creates a pending request and a reminder. A reply never asks for a reply even
-when the flag is set — `re` wins — which is the other half of why a conversation
+`requireResponse` is the private wire field, not a public option: it is absent
+for `team_send` and `true` for `team_ask`. It lives on the message, not in the
+config, and defaults to false: an ordinary `team_send` delivers and wakes the
+peer but does not ask for an answer. Only `team_ask` creates a pending request
+and a reminder. A reply never asks for a reply even when the envelope carries
+the flag — `re` wins — which is the other half of why a conversation
 terminates.
 
 ### Delivery, and why not `followUp`
@@ -196,8 +197,9 @@ TEAM_LABELS=web \
 **`team_*` tools** — for the model and automation: `team_join`, `team_info`,
 `team_roster`, `team_send`, `team_label`, `team_leave`.
 
-`team_send` takes an optional `requireResponse` boolean (default `false`);
-`/team send --require-response` is the same switch from the command line.
+`team_send` (informational) and `team_ask` (requests a reply) are the two
+message tools; `/team send` and `/team ask` are the same pair from the command
+line.
 
 ### What gets saved, and what does not
 

@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BULK_WARN_THRESHOLD, dispatch, doSend, sendMessage } from "./dispatch.js";
+import { BULK_WARN_THRESHOLD, dispatch, doTransmit, transmit } from "./dispatch.js";
 import { applyRoster, createSessionState } from "./session.js";
 import { setLocale } from "./i18n.js";
 
@@ -185,11 +185,11 @@ test("send:显式点名单个节点即使人多也不确认", () => {
   assert.equal(r.party, undefined, "单播不该被当成群发");
 });
 
-// ---------------------------------------------------------------- doSend(确认后复用)
+// ---------------------------------------------------------------- doTransmit(确认后复用)
 
-test("doSend:确认后走同一条发送路径", () => {
+test("doTransmit:确认后走同一条发送路径", () => {
   const c = setup();
-  const r = doSend("peer", "内容", "user", { targets: ["peer"], unknown: [] }, c.state, c.env);
+  const r = doTransmit("peer", "内容", "user", { targets: ["peer"], unknown: [] }, c.state, c.env);
   assert.equal(r.ok, true);
   assert.deepEqual(intentTypes(r), ["send", "card"]);
 });
@@ -371,9 +371,9 @@ test("双入口一致性:命令和工具走同一个 dispatch,输出必然相同
   assert.deepEqual(viaCommand.intentions[0].to, viaTool.intentions[0].to);
 });
 
-test("sendMessage 是 dispatch 与工具共用的底层入口", () => {
+test("transmit 是 dispatch 与工具(team_send / team_ask)共用的底层入口", () => {
   const c = setup();
-  const r = sendMessage("peer", "底层入口", "model", c.state, c.env);
+  const r = transmit("peer", "底层入口", "model", c.state, c.env);
   assert.equal(r.ok, true);
   assert.equal(c.state.outbound.get(r.intentions[0].id).origin, "model");
 });
@@ -456,9 +456,9 @@ test("契约:dispatch 的 send 意图用顶层 text / hops", () => {
   assert.ok(send.id, "必须自带 id");
 });
 
-test("契约:群发确认后走 doSend,同样用顶层 text", () => {
+test("契约:群发确认后走 doTransmit,同样用顶层 text", () => {
   const c = setup();
-  const r = doSend("peer", "群发正文", "user", { targets: ["peer"], unknown: [] }, c.state, c.env);
+  const r = doTransmit("peer", "群发正文", "user", { targets: ["peer"], unknown: [] }, c.state, c.env);
   const send = r.intentions.find((i) => i.type === "send");
 
   assert.ok(send);
@@ -707,90 +707,131 @@ test("send:没有待回复时照常作为新消息发出", () => {
   assert.equal(send.hops, 0);
 });
 
-// ---------------------------------------------------------------- 响应策略(requireResponse)
+// ---------------------------------------------------------------- 响应策略(send / ask)
 
-test("send:默认不要求回信;--require-response 打开要求且不偷走正文", () => {
+/**
+ * 公开 API 只有两个发送工具:`team_send`(通知,不要求回信)与 `team_ask`
+ * (要求回信)。命令侧是 `/team send` 与 `/team ask`。requireResponse 只剩
+ * 私有 wire 元数据 —— 下面的测试把"缺省 / 通知 / 要求"三条路径钉死。
+ */
+test("send:默认(通知)不要求回信,意图上明确是 false", () => {
   const c = setup();
   const plain = run("send", ["peer", "hi"], c);
-  assert.equal(plain.intentions.find((i) => i.type === "send").requireResponse, false, "缺省就是不要求回信");
+  const send = plain.intentions.find((i) => i.type === "send");
+  assert.equal(send.requireResponse, false, "send 就是通知,不要求回信");
+  assert.ok(!plain.lines.some((l) => /要求对方回信/.test(l)), "通知不该说已要求回信");
+});
 
-  const c2 = setup();
-  const r = run("send", ["--require-response", "peer", "帮我", "跑测试"], c2);
+test("ask:要求回信,意图上明确是 true,并告诉用户已要求", () => {
+  const c = setup();
+  const r = run("ask", ["peer", "帮我", "跑测试"], c);
   assert.equal(r.ok, true, r.error);
   const send = r.intentions.find((i) => i.type === "send");
   assert.equal(send.requireResponse, true);
   assert.equal(send.to, "peer");
-  assert.equal(send.text, "帮我 跑测试", "flag 不能被当成正文,也不能吞掉正文");
+  assert.equal(send.text, "帮我 跑测试");
   assert.ok(r.lines.some((l) => /已要求对方回信/.test(l)), `要让用户知道已要求回信:${r.lines}`);
 });
 
-test("send:--require-response 只在前缀被识别,正文里的同名 token 原样保留", () => {
+test("send:用法里不再有 --require-response 开关", () => {
+  const r = run("send", [], setup());
+  assert.equal(r.ok, false);
+  assert.match(r.error, /\/team send/);
+  assert.doesNotMatch(r.error, /require-response/, "公开入口已不再有这个开关");
+});
+
+test("ask:缺收件人或内容时拒绝,用法指向 /team ask", () => {
   const c = setup();
-  const r = run("send", ["peer", "--require-response"], c);
-  assert.equal(r.ok, true, r.error);
-  assert.equal(r.intentions.find((i) => i.type === "send").text, "--require-response", "不能偷走正文");
-  assert.equal(r.intentions.find((i) => i.type === "send").requireResponse, false);
+  for (const args of [[], ["peer"]]) {
+    const r = run("ask", args, c);
+    assert.equal(r.ok, false);
+    assert.match(r.error, /用法/);
+    assert.match(r.error, /\/team ask/, "用法要指向 ask,不能误导成 send");
+  }
 });
 
-test("send:工具路径 requireResponse 布尔值原样进入 send 意图(显式 false 不丢失)", () => {
-  const cTrue = setup();
-  const rTrue = dispatch({ sub: "send", args: ["peer", "x"], origin: "model", requireResponse: true }, cTrue.state, cTrue.env);
-  assert.equal(rTrue.intentions.find((i) => i.type === "send").requireResponse, true);
-
-  const cFalse = setup();
-  const rFalse = dispatch({ sub: "send", args: ["peer", "x"], origin: "model", requireResponse: false }, cFalse.state, cFalse.env);
-  assert.equal(
-    rFalse.intentions.find((i) => i.type === "send").requireResponse,
-    false,
-    "显式 false 必须保留成 boolean,不能被当成缺省真值或被丢掉",
+test("send 与 ask 走同一发送路径:命令与工具结果一致,只有 requireResponse 不同", () => {
+  const cmdSend = run("send", ["peer", "x"], setup()).intentions.find((i) => i.type === "send");
+  const cmdAsk = run("ask", ["peer", "x"], setup()).intentions.find((i) => i.type === "send");
+  const cToolSend = setup();
+  const cToolAsk = setup();
+  const toolSend = dispatch({ sub: "send", args: ["peer", "x"], origin: "model" }, cToolSend.state, cToolSend.env).intentions.find(
+    (i) => i.type === "send",
   );
+  const toolAsk = dispatch({ sub: "ask", args: ["peer", "x"], origin: "model" }, cToolAsk.state, cToolAsk.env).intentions.find(
+    (i) => i.type === "send",
+  );
+
+  assert.equal(cmdSend.requireResponse, false);
+  assert.equal(toolSend.requireResponse, false);
+  assert.equal(cmdAsk.requireResponse, true);
+  assert.equal(toolAsk.requireResponse, true);
+  // 两条路径除标志外的字段形状一致 —— 证明它们真的共用同一条实现
+  for (const it of [cmdSend, cmdAsk, toolSend, toolAsk]) {
+    assert.equal(it.text, "x");
+    assert.equal(it.to, "peer");
+    assert.equal(it.hops, 0);
+    assert.equal(it.re, null);
+  }
 });
 
-test("send:双入口一致 —— 命令 flag 与工具布尔产生相同的 send 意图", () => {
-  const viaCommand = run("send", ["--require-response", "peer", "x"], setup());
-  const toolCtx = setup();
-  const viaTool = dispatch(
-    { sub: "send", args: ["peer", "x"], origin: "user", requireResponse: true },
-    toolCtx.state,
-    toolCtx.env,
+test("ask:命令路径记 origin=user,工具路径记 origin=model", () => {
+  const c = setup();
+  const byUser = run("ask", ["peer", "人问的"], c).intentions.find((i) => i.type === "send");
+  const cTool = setup();
+  const byModel = dispatch({ sub: "ask", args: ["peer", "模型问的"], origin: "model" }, cTool.state, cTool.env).intentions.find(
+    (i) => i.type === "send",
   );
-  assert.equal(
-    viaCommand.intentions.find((i) => i.type === "send").requireResponse,
-    viaTool.intentions.find((i) => i.type === "send").requireResponse,
-  );
+  assert.equal(c.state.outbound.get(byUser.id).origin, "user");
+  assert.equal(cTool.state.outbound.get(byModel.id).origin, "model");
 });
 
-test("send:群发确认 party 携带 requireResponse,确认后 doSend 仍带上", () => {
+test("wire:send 意图的信封不含 requireResponse,ask 意图的信封为 true", async () => {
+  const { transmitBodyFrom } = await import("./session.js");
+  const sendIt = run("send", ["peer", "x"], setup()).intentions.find((i) => i.type === "send");
+  const askIt = run("ask", ["peer", "x"], setup()).intentions.find((i) => i.type === "send");
+  assert.equal("requireResponse" in transmitBodyFrom(sendIt), false, "通知不写标志,接收方按缺省即 false 处理");
+  assert.equal(transmitBodyFrom(askIt).requireResponse, true);
+});
+
+test("send:发送不产生待回复(无提醒),ask:发送才要求回信", () => {
+  // dispatch 的输出本身不建待回复 —— 那是接收方的入站分类。这里断言的是
+  // 意图上携带的标志:只有 ask 才让接收方建立待回复与提醒。
+  assert.equal(run("send", ["peer", "通知"], setup()).intentions.find((i) => i.type === "send").requireResponse, false);
+  assert.equal(run("ask", ["peer", "请回复"], setup()).intentions.find((i) => i.type === "send").requireResponse, true);
+});
+
+test("send:群发确认 party 的 requireResponse 是 false,不会莫名变成要求回信", () => {
   const peers = Array.from({ length: BULK_WARN_THRESHOLD + 1 }, (_, i) => member(`p${i}`));
   const c = setup({ peers });
-  const r = sendMessage("@default", "hi", "model", c.state, c.env, { requireResponse: true });
+  const r = transmit("@default", "hi", "user", c.state, c.env);
+  assert.equal(r.party.kind, "confirmBulk");
+  assert.equal(r.party.requireResponse, false);
+});
+
+test("ask:群发确认 party 携带 requireResponse=true,确认后 doTransmit 仍带上", () => {
+  const peers = Array.from({ length: BULK_WARN_THRESHOLD + 1 }, (_, i) => member(`p${i}`));
+  const c = setup({ peers });
+  const r = transmit("@default", "hi", "model", c.state, c.env, { requireResponse: true });
   assert.equal(r.party.kind, "confirmBulk");
   assert.equal(r.party.requireResponse, true, "确认数据必须带着标志,否则确认后就丢了");
   assert.deepEqual(r.intentions, [], "确认前不直接发送");
 
   const local = { targets: peers.map((p) => p.name), unknown: [] };
-  const after = doSend(r.party.to, r.party.text, r.party.origin, local, c.state, c.env, {
+  const after = doTransmit(r.party.to, r.party.text, r.party.origin, local, c.state, c.env, {
     requireResponse: r.party.requireResponse,
   });
-  assert.equal(after.intentions.find((i) => i.type === "send").requireResponse, true);
+  assert.equal(after.intentions.find((i) => i.type === "send").requireResponse, true, "确认后 ask 不能退化成 send");
 });
 
-test("send:默认群发确认 party 的 requireResponse 是 false,不会莫名变成要求回信", () => {
-  const peers = Array.from({ length: BULK_WARN_THRESHOLD + 1 }, (_, i) => member(`p${i}`));
-  const c = setup({ peers });
-  const r = sendMessage("@default", "hi", "user", c.state, c.env);
-  assert.equal(r.party.kind, "confirmBulk");
-  assert.equal(r.party.requireResponse, false);
-});
-
-test("send:要求回信的消息不会被入站关联吞掉(作为新请求发出)", async () => {
+test("ask:要求回信的消息不会被入站关联吞掉(作为新请求发出)", async () => {
   const { handleIncoming } = await import("./session.js");
   const c = setup();
   // peer 之前发过一条不要求回信的通知 → 存在可选关联
   handleIncoming(c.state, { from: "peer", id: "note-1", re: null, body: { text: "通知", hops: 0 } });
   assert.equal(c.state.incomingIds.get("peer").id, "note-1");
 
-  const r = dispatch({ sub: "send", args: ["peer", "新请求"], origin: "model", requireResponse: true }, c.state, c.env);
+  const r = dispatch({ sub: "ask", args: ["peer", "新请求"], origin: "model" }, c.state, c.env);
   const send = r.intentions.find((i) => i.type === "send");
   assert.equal(send.re, null, "要求回信是新请求,不能被绑成对旧通知的回复");
   assert.equal(send.requireResponse, true, "要求回信不能被归零");
@@ -862,6 +903,8 @@ test("en-US:分发输出的代表性路径渲染英文", () => {
 
     assert.match(run("nonsense", [], setup()).error, /Unknown subcommand/);
     assert.match(run("send", ["peer", "hi"], setup({ connState: "offline" })).error, /not connected/);
+    assert.match(run("ask", [], setup()).error, /Usage: \/team ask/, "ask 的用法也要本地化成英文");
+    assert.match(run("ask", ["peer", "hi"], setup({ connState: "offline" })).error, /not connected/);
     assert.match(run("join", [], setup()).error, /Missing team name/);
   } finally {
     // 文件顶部把 locale 钉在 zh-Hans,恢复它,免得影响别的断言。

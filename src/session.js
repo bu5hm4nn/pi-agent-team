@@ -275,7 +275,7 @@ export function resolveLocal(s, to) {
  * origin 是要紧的:对方回复时,靠它判断"模型知道这回事吗"。
  * 用户用 /team send 发的消息,模型完全不知道,不该被叫醒来疑惑。
  */
-export function sendMessage(s, { to, text, hops = 0, re = null, origin = "user", fyi = false, requireResponse = false }) {
+export function transmit(s, { to, text, hops = 0, re = null, origin = "user", fyi = false, requireResponse = false }) {
   const targets = resolveLocal(s, to);
   if (targets.targets.length === 0) {
     return [
@@ -315,8 +315,12 @@ function formatTarget(to) {
  * 的手动发送)共用同一套字段语义,信封形状不可能分叉,而且这段接线
  * 能被纯函数测到(requireResponse 只把 **true** 写进信封,缺省与 false
  * 都不写 —— 接收方按缺省即 false 处理,和 fyi 一致)。
+ *
+ * requireResponse 是**私有 wire 元数据**:公开工具已经没有这个布尔
+ * (team_send 不带、team_ask 带上),但信封格式沿用旧字段名,和其它
+ * 节点上的版本互通。
  */
-export function sendBodyFrom(intention = {}) {
+export function transmitBodyFrom(intention = {}) {
   return {
     text: String(intention.text ?? ""),
     hops: typeof intention.hops === "number" ? intention.hops : 1,
