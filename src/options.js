@@ -27,6 +27,8 @@
  */
 
 import { MODES } from "./mode.js";
+import { t } from "./i18n.js";
+import { M } from "./messages.js";
 
 /** team 级选项 → 落盘字段名 */
 const TEAM_KEYS = new Set(["url", "token", "mode", "seeds"]);
@@ -120,46 +122,46 @@ export function validateOptions(values = {}) {
 
     if (k === "url") {
       if (!/^(https?|wss?):\/\//.test(v)) {
-        return { ok: false, reason: `url 需要以 http:// 或 https:// 开头,实际 "${v}"` };
+        return { ok: false, reason: t(M.options.urlInvalid, { value: v }) };
       }
       team.url = v;
     } else if (k === "token") {
-      if (v.length < 16) return { ok: false, reason: "token 太短(至少 16 位)" };
+      if (v.length < 16) return { ok: false, reason: t(M.options.tokenTooShort) };
       team.token = v;
     } else if (k === "mode") {
       if (!MODES.includes(v)) {
-        return { ok: false, reason: `mode 只能是 ${MODES.join(" / ")},实际 "${v}"` };
+        return { ok: false, reason: t(M.options.modeInvalid, { modes: MODES.join(" / "), value: v }) };
       }
       team.mode = v;
     } else if (k === "seeds") {
       const seeds = parseSeeds(v);
-      if (!seeds.length) return { ok: false, reason: "seeds 不能为空" };
+      if (!seeds.length) return { ok: false, reason: t(M.options.seedsEmpty) };
       for (const s of seeds) {
         if (!/^[^\s:]+:\d{1,5}$/.test(s)) {
-          return { ok: false, reason: `seed "${s}" 应该写成 host:port,例如 100.64.0.1:7946` };
+          return { ok: false, reason: t(M.options.seedInvalid, { seed: s }) };
         }
       }
       team.seeds = seeds;
     } else if (k === "name") {
       if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(v)) {
-        return { ok: false, reason: `节点名 "${v}" 不合法(字母数字开头,可用 _ . -,最长 64)` };
+        return { ok: false, reason: t(M.options.nameInvalid, { value: v }) };
       }
       session.name = v;
     } else if (k === "port") {
       const port = Number(v);
       // 0 合法:交给内核分配。/team status 会报出实际端口。
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
-        return { ok: false, reason: `port 应该是 0-65535 的整数,实际 "${v}"(0 = 自动分配)` };
+        return { ok: false, reason: t(M.options.portInvalid, { value: v }) };
       }
       session.port = port;
     } else if (k === "listen") {
       // 不做严格 IP 校验:主机名和 IPv6 都合法,交给 listen() 去报错更准
-      if (/\s/.test(v)) return { ok: false, reason: `listen 地址不能有空格,实际 "${v}"` };
+      if (/\s/.test(v)) return { ok: false, reason: t(M.options.listenInvalid, { value: v }) };
       session.listen = v;
     } else if (k === "labels") {
       const labels = parseLabels(v);
       // 上限和 broker / 成员表一致,免得本机接受了而别人看不到
-      if (labels.length > 8) return { ok: false, reason: `标签最多 8 个,实际 ${labels.length} 个` };
+      if (labels.length > 8) return { ok: false, reason: t(M.options.labelsTooMany, { count: labels.length }) };
       session.labels = labels;
     }
   }
@@ -174,11 +176,11 @@ export function validateOptions(values = {}) {
  * 完全相同的判断,否则"命令能连上、工具连不上"这种问题会反复出现。
  */
 export function checkModeRequirements({ mode, url, seeds, token }) {
-  if (!token) return { ok: false, reason: "缺少 token(用 --token 或 TEAM_TOKEN 提供)" };
+  if (!token) return { ok: false, reason: t(M.options.missingToken) };
 
   if (mode === "broker") {
     if (!url) {
-      return { ok: false, reason: "broker 模式需要 --url,例如 --url http://100.64.0.1:8787" };
+      return { ok: false, reason: t(M.options.brokerNeedsUrl) };
     }
     return { ok: true };
   }
@@ -187,20 +189,18 @@ export function checkModeRequirements({ mode, url, seeds, token }) {
     // 不是错误,但后果要说清楚:没有种子的节点只能等别人连它
     return {
       ok: true,
-      warning: `${mode} 模式没有 --seeds:本节点只能等别人主动连你。给它一个已在线节点的地址即可双向发现。`,
+      warning: t(M.options.meshNoSeeds, { mode }),
     };
   }
   return { ok: true };
 }
 
-/** 给 /team status 和帮助信息用的一行说明 */
-export const OPTION_HELP = [
-  "  --url <http://host:port>    broker 地址(broker 模式必需)",
-  "  --token <hex>               team token(必需)",
-  "  --mode <broker|mesh|swim>   投递模式(默认 broker)",
-  "  --seeds <host:port,...>     mesh/swim 的种子地址",
-  "  --name <名字>               本节点名(仅本次运行)",
-  "  --labels <a,b>              本节点标签(仅本次运行)",
-  "  --port <n>                  mesh/swim 监听端口(仅本次运行,0 = 自动)",
-  "  --listen <地址>             mesh/swim 监听地址(仅本次运行)",
-].join("\n");
+/**
+ * 给 /team status 和帮助信息用的一行说明。
+ *
+ * 做成函数而不是模块常量:常量在 import 时就冻住了,而 locale 是
+ * 启动期才 setLocale 选定的 —— 冻住的常量拿不到后选的 locale。
+ */
+export function optionHelp() {
+  return t(M.options.help);
+}

@@ -9,7 +9,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,9 +17,27 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 const files = new Set(pkg.files);
 
-const sources = readdirSync(join(ROOT, "src")).filter((f) => f.endsWith(".js") && !f.endsWith(".test.js"));
+/**
+ * 递归列出 src/ 下的源文件,返回相对 src/ 的 POSIX 路径。
+ *
+ * 只扫顶层会漏掉 src/locales/*.js 这类嵌套模块:文件没有列进 files[],
+ * 发布包就缺一个模块,用户 import 直接失败,而仓库里全绿。
+ * 测试文件(*.test.js)不发布,所以排除。
+ */
+function listSources(dir, prefix = "") {
+  const out = [];
+  for (const name of readdirSync(dir)) {
+    const abs = join(dir, name);
+    const rel = prefix ? `${prefix}/${name}` : name;
+    if (statSync(abs).isDirectory()) out.push(...listSources(abs, rel));
+    else if (name.endsWith(".js") && !name.endsWith(".test.js")) out.push(rel);
+  }
+  return out;
+}
 
-test("每个 src/ 源文件都在发布列表里", () => {
+const sources = listSources(join(ROOT, "src"));
+
+test("每个 src/ 源文件都在发布列表里(递归,含 locales 等嵌套模块)", () => {
   const missing = sources.filter((f) => !files.has(`src/${f}`));
   assert.deepEqual(missing, [], `这些文件不会被发布,装了包的用户 import 会失败:${missing.join(", ")}`);
 });

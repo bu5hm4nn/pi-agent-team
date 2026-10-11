@@ -21,6 +21,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { MODES } from "./mode.js";
+import { t } from "./i18n.js";
+import { M } from "./messages.js";
 
 /** 名字必须和 broker 的校验一致,否则能写下来却连不上 */
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
@@ -40,14 +42,14 @@ const teamFile = (team, home) => join(configDir(home), `${team}.json`);
  */
 export function validateTeamName(name) {
   if (typeof name !== "string" || !TEAM_RE.test(name)) {
-    return { ok: false, reason: "team 名只能用小写字母、数字、. _ -,1-32 字符,且以字母数字开头" };
+    return { ok: false, reason: t(M.config.teamNameInvalid) };
   }
   return { ok: true };
 }
 
 export function validateAgentName(name) {
   if (typeof name !== "string" || !NAME_RE.test(name)) {
-    return { ok: false, reason: "节点名只能用字母、数字、. _ -,1-32 字符,且以字母或数字开头" };
+    return { ok: false, reason: t(M.config.agentNameInvalid) };
   }
   return { ok: true };
 }
@@ -112,11 +114,11 @@ export function removeTeam(team, home = homedir()) {
  * join 才负责连上。
  */
 export function createTeam({ team, url, token, labels = [], mode = "broker", seeds = [], home = homedir() }) {
-  const t = validateTeamName(team);
-  if (!t.ok) return { ok: false, reason: t.reason };
+  const nameCheck = validateTeamName(team);
+  if (!nameCheck.ok) return { ok: false, reason: nameCheck.reason };
 
   if (!MODES.includes(mode)) {
-    return { ok: false, reason: `mode 只能是 ${MODES.join(" / ")},实际 "${mode}"` };
+    return { ok: false, reason: t(M.config.modeInvalid, { modes: MODES.join(" / "), value: mode }) };
   }
 
   // broker 模式必须有 url;mesh/swim 用 seeds,url 可以不填。
@@ -127,17 +129,17 @@ export function createTeam({ team, url, token, labels = [], mode = "broker", see
     // 而用户只是写了个等价的写法。
     normalized = normalizeUrl(url);
     if (typeof normalized !== "string" || !/^https?:\/\//.test(normalized)) {
-      return { ok: false, reason: "url 必须以 http:// 或 https:// 开头(ws:// 和 wss:// 也接受,会转换)" };
+      return { ok: false, reason: t(M.config.urlInvalid) };
     }
   } else if (mode === "broker") {
-    return { ok: false, reason: "broker 模式需要 url(mesh/swim 用 seeds)" };
+    return { ok: false, reason: t(M.config.brokerNeedsUrl) };
   }
   if (readTeam(team, home)) {
-    return { ok: false, reason: `team "${team}" 已存在。用 /team join ${team} 加入,或先 /team leave ${team}` };
+    return { ok: false, reason: t(M.config.teamExists, { team }) };
   }
   if (token && !/^[0-9a-fA-F]{16,}$/.test(token)) {
     // 不强制,只是提醒。用 openssl rand -hex 32 生成的正好符合。
-    return { ok: false, reason: "token 看起来不像 hex(建议 openssl rand -hex 32 生成 64 位 hex)" };
+    return { ok: false, reason: t(M.config.tokenNotHex) };
   }
 
   const finalToken = token || generateToken();
@@ -161,8 +163,8 @@ export function createTeam({ team, url, token, labels = [], mode = "broker", see
  * 每台机器都要先手工建配置文件,那就不像"join"了。
  */
 export function joinTeam({ team, url, token, mode, seeds, save = true, home = homedir() }) {
-  const t = validateTeamName(team);
-  if (!t.ok) return { ok: false, reason: t.reason };
+  const nameCheck = validateTeamName(team);
+  if (!nameCheck.ok) return { ok: false, reason: nameCheck.reason };
 
   const existing = readTeam(team, home);
 
@@ -172,8 +174,8 @@ export function joinTeam({ team, url, token, mode, seeds, save = true, home = ho
       return {
         ok: false,
         reason: known.length
-          ? `本地没有 team "${team}"。已有的:${known.join(", ")}`
-          : `本地没有 team "${team}",首次加入需要 token`,
+          ? t(M.config.teamUnknownKnown, { team, known: known.join(", ") })
+          : t(M.config.teamUnknownNeedsToken, { team }),
       };
     }
     const created = createTeam({ team, url, token, mode, seeds, home });
@@ -190,7 +192,7 @@ export function joinTeam({ team, url, token, mode, seeds, save = true, home = ho
     if (url) config.url = normalizeUrl(url);
     if (token) config.token = token;
     if (mode) {
-      if (!MODES.includes(mode)) return { ok: false, reason: `mode 只能是 ${MODES.join(" / ")},实际 "${mode}"` };
+      if (!MODES.includes(mode)) return { ok: false, reason: t(M.config.modeInvalid, { modes: MODES.join(" / "), value: mode }) };
       config.mode = mode;
     }
     if (seeds?.length) {
@@ -215,13 +217,13 @@ export function joinTeam({ team, url, token, mode, seeds, save = true, home = ho
  * 就等于离开了。
  */
 export function leaveTeam({ team, home = homedir() }) {
-  const t = validateTeamName(team);
-  if (!t.ok) return { ok: false, reason: t.reason };
+  const nameCheck = validateTeamName(team);
+  if (!nameCheck.ok) return { ok: false, reason: nameCheck.reason };
 
   const existed = removeTeam(team, home);
   return existed
     ? { ok: true, team }
-    : { ok: false, reason: `本地没有 team "${team}"` };
+    : { ok: false, reason: t(M.config.teamUnknown, { team }) };
 }
 
 /** 把 ws:// 统一成 http://,因为命令行和文档里两种都有人写 */

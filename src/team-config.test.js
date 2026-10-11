@@ -23,6 +23,11 @@ import {
   validateTeamName,
   writeTeam,
 } from "./team-config.js";
+import { setLocale } from "./i18n.js";
+
+// 迁移后这里断言的 reason 文案来自 zh-Hans 目录;默认 locale 是 en-US,
+// 把 locale 钉在 zh-Hans 而不是改写断言。
+setLocale("zh-Hans");
 
 /** 每个用例一个独立 home,互不污染 */
 function withHome(t) {

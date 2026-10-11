@@ -8,6 +8,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { MODES, createTransport, modeReadiness, normalizeSeeds, resolveMode, toSocketUrl } from "./mode.js";
+import { setLocale } from "./i18n.js";
+
+// 迁移后这里断言的 reason / warning 文案来自 zh-Hans 目录;默认 locale 是 en-US,
+// 把 locale 钉在 zh-Hans 而不是改写断言。
+setLocale("zh-Hans");
 
 // ---------------------------------------------------------------- 模式解析
 
