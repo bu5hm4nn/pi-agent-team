@@ -1,119 +1,86 @@
 ---
 name: pi-agent-team
-description: 与其他 Pi 节点(可能在别的机器,也可能是同一台机器上的另一个 Pi)互相通信。当需要把工作派给另一个节点、群发给一组节点、或收到 `[来自 <名字> 的 team 消息]` / `[来自 <名字> 的 team 回复]` 前缀的输入时使用。
+description: Communicate with other Pi nodes, on the same or different machines. Use when delegating work, messaging a group, or receiving a Team message/reply header (including localized equivalents).
 ---
 
 # Pi Agent Team
 
-你可能是多节点 Pi 团队的一员。每个节点是**另一个正在运行的 Pi**,
-有独立的会话和上下文;它们可能在别的机器上,也可能和你在同一台机器上。
-身份是**节点名**,不是 IP。
+Each node is another running Pi with its own session and context. Identify nodes
+by name, not IP. Follow the human conversation language; team semantics do not
+change with language.
 
-## 判断自己是否在团队里
+## Check membership
 
-系统提示里有 `## Team` 段落,就说明你在团队里。那里列出了:
+The system prompt's `## Team` section lists your node name and labels, online
+nodes grouped by host, and available `@label` groups. Without that section, do
+not call `team_send`. Get recipient names from the roster; never guess them.
 
-- 本节点名和标签
-- 在线节点,按机器分组
-- 可用的 `@分组`
+## Join and configure
 
-没有 `## Team` 段时不要调用 `team_send` —— 必然失败。
+Use `team_join` to join or change configuration:
 
-## 模式和团队配置
-
-团队有三种连接模式,由统一配置决定。需要加入或改配置时用 `team_join`:
-
-```
-team_join({ team: "dev", token: "...", url: "http://100.64.0.1:8787" })                    // broker(默认)
-team_join({ team: "dev", token: "...", mode: "mesh", seeds: ["100.64.0.1:19801"] })        // 直连
-team_join({ team: "dev", token: "...", mode: "swim", seeds: ["100.64.0.1:7946"] })         // SWIM 管成员
+```js
+team_join({ team: "dev", token: "...", url: "http://100.64.0.1:8787" })
+team_join({ team: "dev", token: "...", mode: "mesh", seeds: ["100.64.0.1:19801"] })
+team_join({ team: "dev", token: "...", mode: "swim", seeds: ["100.64.0.1:7946"] })
 ```
 
-- `mode`、`seeds` 会写进本机 team 配置,下次启动不用再给。
-- `name`、`labels`、`port`、`listen` **只影响本次运行**,不落盘 ——
-  同一台机器可以有多个 Pi,它们共用一份配置。节点名存进去会让第二个
-  agent 覆盖第一个;端口存进去会让它监听一个已被占用的端口。
-- 改 `mode` 不会动已有的 `url` / `token`。
-- 需要看当前配置用 `team_info`;列在线节点用 `team_roster`。
+- `mode` and `seeds` persist in local team config.
+- `name`, `labels`, `port`, and `listen` affect only this run. Multiple Pi nodes
+  may share one machine's config; persisting identities or ports would collide.
+- Changing `mode` preserves existing `url` and `token`.
+- Use `team_info` for configuration/status and `team_roster` for online nodes.
+- Never guess tokens or addresses. Ask the user for missing credentials.
 
-**不要**为了连上团队去猜 token 或地址 —— 那属于用户的凭据,缺什么就问用户。
+## Send
 
-## 发送
+Use `team_send({ to, text })`. Recipients can be a node name (`"laptop-web"`),
+comma-separated names (`"web1,db1"`), a label (`"@web"`), or everyone else (`"*"`).
+`"@default"` selects the default group.
 
-用 `team_send` 工具,`to` 有四种写法:
-
-| 写法 | 含义 |
-|---|---|
-| `"laptop-web"` | 单个节点 |
-| `"web1,db1"` | 多个指定节点 |
-| `"@web"` | 标签为 `web` 的所有节点 |
-| `"*"` | 除你以外的所有节点 |
-
-```
-team_send({ to: "dev01-api", text: "在 dev 分支跑一下集成测试,把失败用例列给我" })
-team_send({ to: "@web", text: "前端依赖升级了,各自重新构建一次" })
+```js
+team_send({ to: "dev01-api", text: "Run integration tests on dev and report failures." })
+team_send({ to: "@web", text: "Frontend dependencies changed; rebuild your projects." })
 ```
 
-- 名字从 `## Team` 段里取,不要自己拼、不要猜。
-- **群发要克制。** `@标签` 和 `*` 会让每个收件人都跑一轮完整思考,
-  花各自的 token。能点名就点名。
-- 工具返回成功只表示写进了对方 socket,**不表示对方已处理**。
+Be sparing with broadcasts: each recipient spends a full reasoning turn and
+its own tokens. Success means the message was written to the peer's socket,
+not that the peer has processed it.
 
-## 收到请求
+## Receive and reply
 
-```
-[来自 laptop-web 的 team 消息]
-帮我在 dev 分支跑一下集成测试
-```
+A `[Team message from <name>]` header (or a localized equivalent) marks a
+teammate's request, not a human typing. Act on the content; do not greet,
+repeat an acknowledgement, or ask "What should I do?" Messages arriving while
+you are busy wait for a turn boundary and do not interrupt tool calls.
 
-这是另一个 agent 发来的**请求**,不是真人打字。
+Your turn output is **not** sent back automatically. Reply explicitly:
 
-- 直接办事,不要问候,不要反问"需要我做什么",也不要复述确认。
-- **要回复它,显式调 `team_send`** —— 你这一轮的输出不会自动回传:
-
-  ```
-  team_send({ to: "laptop-web", text: "跑完了,3 个用例失败:..." })
-  ```
-
-  发给谁就是回复谁,不用额外参数;系统会自动把它关联到那条请求上。
-- **不需要回复的可以不管**(纯通知、寒暄)。系统最多提醒一次,不会反复打扰。
-- 忙的时候消息会先排着,不打断你手上的工具调用;等你这一轮告一段落才会看到。
-
-## 收到回复
-
-```
-[来自 dev01-api 的 team 回复]
-3 个用例失败:...
----
-上面是 teammate dev01-api 对你之前发给它的消息「在 dev 分支跑一下集成测试…」的回复
+```js
+team_send({ to: "laptop-web", text: "Finished: three tests failed: ..." })
 ```
 
-这是对方对**你之前发出的消息**的回复。
+Sending to the requester automatically associates the reply with its request;
+no extra parameter is needed. Notifications and greetings may need no reply.
+The system reminds you at most once.
 
-- **收到回复不需要再回。** 对话到此自然结束 —— 这也是它不会打转的原因。
-- 如果确实需要继续(追问、下一步任务),显式调用 `team_send`。
-- 回复会引用你当初发的原文,用它来接上上下文。
+A `[Team reply from <name>]` header (or a localized equivalent) marks a reply
+to your earlier message. Its scaffold quotes that message for context.
+**Replies need no further reply.** Only call `team_send` again for a genuine
+follow-up or new task. Otherwise the conversation stops rather than looping.
 
-请求需要回复、回复不需要 —— 这个区分很重要。两边都回的话会
-"请求→回复→回复的回复…"一路打转,只能靠跳数上限兜住。
+## Delegate effectively
 
-## 派活的正确姿势
+Cross-node communication takes seconds and starts a full reasoning turn.
+Include background, desired output, and acceptance criteria in one message.
+Delegate complete work units rather than high-frequency back-and-forth. The
+recipient may be busy; continue your own work after sending.
 
-跨节点通信延迟是**秒级**,对端要起一整轮思考。所以:
+## Offline peers and boundaries
 
-- **一次说清**:背景、期望产出、验收标准一起给。
-- 不要拿 team 消息做高频来回的同步。多轮协作先拆任务,一次派一个完整单元。
-- 对端可能忙。忙时你的消息会排在它的下一个 turn 开头,不会打断它手上的
-  工具调用,也不会把它的原任务挤乱。发完继续自己的活。
+If delivery fails or a node is not found, check the roster or do the work
+locally. The broker has no offline queue; undelivered messages are lost.
 
-## 对端离线
-
-工具返回失败、或看到"找不到 X(不在线或名字写错)"时,那个节点不在。
-broker **不做离线队列**,消息直接丢了。先看 `## Team` 段确认谁在线,
-或者自己把活干了。
-
-## 边界
-
-- 消息是**明文**经过 broker 的(链路本身有 WireGuard 加密)。
-  不要在消息里放密钥、凭据。
-- 对端**看不到**你这边的对话历史。发消息时要带上必要的背景。
+Broker messages are plaintext at the broker (the underlying tailnet link is
+WireGuard-encrypted). Do not send secrets or credentials. Peers cannot see
+your conversation history; include the context they need.

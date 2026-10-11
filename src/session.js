@@ -328,23 +328,12 @@ export function classifyInbound(s, env) {
 /** 构造注入给模型的文本。请求和回复的措辞必须不同,见 classifyInbound 注释。 */
 export function buildPayload(from, text, cls) {
   if (cls.kind === "reply") {
-    const quote = cls.original ? `你之前发给它的消息「${excerpt(cls.original, 120)}」` : "你之前发出的消息";
-    return (
-      `[来自 ${from} 的 team 回复]\n${text}\n\n---\n` +
-      `上面是 teammate ${from} 对${quote}的回复(不是真人用户在打字)。` +
-      `你这一轮的输出【不会】自动回传给 ${from}。` +
-      `如果需要继续和它对话,显式调用 team_send;否则直接处理这条回复即可。`
-    );
+    const quote = cls.original
+      ? t(M.agent.originalQuote, { original: excerpt(cls.original, 120) })
+      : t(M.agent.originalMessage);
+    return t(M.agent.replyPayload, { from, text, quote });
   }
-  return (
-    `[来自 ${from} 的 team 消息]\n${text}\n\n---\n` +
-    `上面是 teammate ${from} 发来的消息原文(不是真人用户在打字)。` +
-    `按内容本身的意思回应:是任务就执行,是讨论/诗句/提问就接着往下走。` +
-    `不要反问"需要我做什么",也不要复述确认。\n` +
-    `你这一轮的输出【不会】自动回传给 ${from}。要回复它,显式调用 ` +
-    `team_send({ to: "${from}", text: "..." });它会和这条请求关联起来。` +
-    `不回复也可以 —— 需要收尾的话做一次就好。`
-  );
+  return t(M.agent.requestPayload, { from, text });
 }
 
 export function excerpt(text, max = 120) {

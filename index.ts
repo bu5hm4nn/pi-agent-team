@@ -136,7 +136,7 @@ const envOf = () => ({
  */
 async function notifyInjectFailure(from: string, reason: string, ctx: ExtensionContext) {
   if (!from) return;
-  const text = `[系统] 你的消息没有送达 ${state.self}:注入失败(${reason})。请重发。`;
+  const text = t(M.agent.deliveryFailure, { self: state.self, reason });
 
   // 直接在传输层构造信封。inbound 的 id 已经记在 seen 里，不走
   // sendMessage —— 那样会把它当成一次普通发送而记入 outbound，
@@ -232,9 +232,7 @@ async function runIntentions(
             {
               customType: TEAM_MESSAGE_TYPE,
               content:
-                `[team 待回复]${who.join(", ")} 之前发来的请求还没有回复。` +
-                `现在就回复它:team_send({ to: "${who[0]}", text: "..." })。` +
-                `如果本来就不需要回复,忽略这条即可。\n\n${payload}`,
+                t(M.agent.reminder, { who: who.join(", "), first: who[0], payload }),
               display: false,
             },
             { triggerTurn: true },
@@ -707,27 +705,27 @@ export default function (pi: ExtensionAPI) {
           .sort((a, b) => a.name.localeCompare(b.name))
           .map((m) => `  ${m.name}${m.host ? ` (${m.host})` : ""}${m.labels?.length ? ` [${m.labels.join(" ")}]` : ""}`)
           .join("\n")
-      : "  (无其他节点在线)";
+      : t(M.agent.emptyRoster);
 
     const note = [
       "",
       "## Team",
-      `你是多机 Pi 集群的一员。节点名 \`${state.self}\`,team \`${currentTeam ?? "(直接连接)"}\`,模式 \`${mode}\`。`,
-      state.selfLabels?.length ? `你的标签:${state.selfLabels.join(", ")}` : "",
+      t(M.agent.identity, { self: state.self, team: currentTeam ?? t(M.agent.direct), mode }),
+      state.selfLabels?.length ? t(M.agent.selfLabels, { labels: state.selfLabels.join(", ") }) : "",
       "",
-      "在线节点:",
+      t(M.agent.online),
       roster,
-      labels.length ? `可用分组:${labels.map((l) => `@${l}`).join(" ")}` : "",
+      labels.length ? t(M.agent.groups, { labels: labels.map((l) => `@${l}`).join(" ") }) : "",
       "",
-      "**发送**:调用 `team_send({ to, text })`。`to` 可以是节点名、`@label`(分组)、`\"*\"`(全员)、`\"@default\"`(默认组),或数组。",
-      "**查成员**:调用 `team_roster()`,或 `team_info({ what: \"peers\" })`。",
+      t(M.agent.sendGuide),
+      t(M.agent.rosterGuide),
       "",
-      "**接收**:输入里出现 `[来自 <名字> 的 team 消息]` 前缀时,那是另一个 agent 发来的请求,不是真人打字。",
-      "按内容本身的意思回应:是任务就执行,是讨论就接着走。不要反问「需要我做什么」。",
-      "**回复要用 team_send** —— 你这一轮的输出不会自动回传。发给谁就是回复谁,不需要额外参数。",
-      "不需要回复的(纯通知、寒暄)可以不管;系统最多提醒一次,不会反复打扰。",
+      t(M.agent.incomingGuide),
+      t(M.agent.respondGuide),
+      t(M.agent.replyGuide),
+      t(M.agent.optionalReply),
       "",
-      "**克制**:每次发送都占用对方一轮完整思考,群发更贵。除非任务需要,不要主动发消息。",
+      t(M.agent.restraint),
       "",
     ]
       .filter((l) => l !== "")
@@ -741,8 +739,8 @@ export default function (pi: ExtensionAPI) {
     name: "team_send",
     label: "Team Send",
     description:
-      "给同一 team 里的其他 Pi 节点发消息,也用它回复收到的队友消息。to 可以是节点名、'@label' 分组、'*' 全员、'@default' 默认组,或逗号分隔的名字数组。名字从 team_roster 或系统提示的 Team 段落获取。",
-    promptSnippet: "team_send(to, text) — 给一个或一组 Pi 节点发消息(也是回复队友的方式)",
+      t(M.agent.sendDescription),
+    promptSnippet: t(M.agent.sendSnippet),
     promptGuidelines: [
       "Use team_send only when the task spans another machine; each recipient costs a full model turn.",
       "Replies are NOT automatic: when a teammate's message needs an answer, call team_send to answer it. Sending back to the same peer links it to their request automatically.",
@@ -750,8 +748,8 @@ export default function (pi: ExtensionAPI) {
       "Broadcasting with '*' or '@label' wakes every matching node; prefer naming recipients.",
     ],
     parameters: Type.Object({
-      to: Type.String({ description: "节点名、'@label'、'*'、'@default',或逗号分隔多收件人" }),
-      text: Type.String({ description: "消息内容:背景、期望产出、验收标准一次说清" }),
+      to: Type.String({ description: t(M.agent.toParam) }),
+      text: Type.String({ description: t(M.agent.textParam) }),
     }),
 
     renderCall(args, theme) {
@@ -802,8 +800,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "team_roster",
     label: "Team Roster",
-    description: "列出在线节点及其所在机器和标签。用于按机器或标签挑选收件人,或确认谁在线。",
-    promptSnippet: "team_roster() — 列出在线节点与标签",
+    description: t(M.agent.rosterDescription),
+    promptSnippet: t(M.agent.rosterSnippet),
     parameters: Type.Object({}),
 
     renderCall(_args, theme) {
@@ -836,9 +834,9 @@ export default function (pi: ExtensionAPI) {
             text: members.length
               ? [
                   ...members.map((m) => `${m.name}${m.labels.length ? ` [${m.labels.join(" ")}]` : ""} host=${m.host ?? "?"}`),
-                  labels.length ? `\n可用分组:${labels.map((l) => `@${l}`).join(" ")}` : "",
+                  labels.length ? t(M.agent.rosterGroups, { labels: labels.map((l) => `@${l}`).join(" ") }) : "",
                 ].join("\n")
-              : "没有其他节点在线",
+              : t(M.agent.noPeers),
           },
         ],
         details: { members, labels },
@@ -849,10 +847,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "team_info",
     label: "Team Info",
-    description: "查看本节点在 team 里的状态:team 名、连接状态、broker、在线数量、回信提醒模式。",
-    promptSnippet: "team_info() — 查看 team 状态",
+    description: t(M.agent.infoDescription),
+    promptSnippet: t(M.agent.infoSnippet),
     parameters: Type.Object({
-      what: Type.Optional(Type.String({ description: "'status'(默认)或 'peers'" })),
+      what: Type.Optional(Type.String({ description: t(M.agent.whatParam) })),
     }),
 
     renderCall(args, theme) {
@@ -889,29 +887,29 @@ export default function (pi: ExtensionAPI) {
     name: "team_join",
     label: "Team Join",
     description:
-      "加入一个 team 并连接。team 已在本机配置里时只需 team 名;首次加入需要 token,以及 url(broker 模式)或 seeds(mesh/swim)。" +
-      "改 mode 或 seeds 也用它 —— 已有的 url/token 会保留,不会被清掉。",
+      t(M.agent.joinDescription) +
+      t(M.agent.joinPreserve),
     promptSnippet:
-      "team_join(team, token?, url?, mode?, seeds?, name?, labels?, port?) — 加入或重新配置 team",
+      t(M.agent.joinSnippet),
     parameters: Type.Object({
-      team: Type.String({ description: "team 名(小写字母数字)" }),
-      token: Type.Optional(Type.String({ description: "team token,首次加入时必需" })),
-      url: Type.Optional(Type.String({ description: "broker 地址,broker 模式必需,例如 http://100.64.0.1:8787" })),
+      team: Type.String({ description: t(M.agent.teamParam) }),
+      token: Type.Optional(Type.String({ description: t(M.agent.tokenParam) })),
+      url: Type.Optional(Type.String({ description: t(M.agent.urlParam) })),
       mode: Type.Optional(
         Type.Union([Type.Literal("broker"), Type.Literal("mesh"), Type.Literal("swim")], {
-          description: "投递模式。broker(默认)经中转;mesh/swim 节点直连,需要 seeds",
+          description: t(M.agent.modeParam),
         }),
       ),
       seeds: Type.Optional(
-        Type.Array(Type.String(), { description: "mesh/swim 的种子地址,形如 100.64.0.1:19801" }),
+        Type.Array(Type.String(), { description: t(M.agent.seedsParam) }),
       ),
-      name: Type.Optional(Type.String({ description: "本节点名。只影响本次运行,不写入配置" })),
-      labels: Type.Optional(Type.Array(Type.String(), { description: "本节点标签,供 @label 群发" })),
+      name: Type.Optional(Type.String({ description: t(M.agent.nameParam) })),
+      labels: Type.Optional(Type.Array(Type.String(), { description: t(M.agent.labelsParam) })),
       port: Type.Optional(
-        Type.Number({ description: "mesh/swim 的监听端口。只影响本次运行。0 = 让内核分配(默认)" }),
+        Type.Number({ description: t(M.agent.portParam) }),
       ),
       listen: Type.Optional(
-        Type.String({ description: "mesh/swim 的监听地址,默认 0.0.0.0。只影响本次运行" }),
+        Type.String({ description: t(M.agent.listenParam) }),
       ),
     }),
 
@@ -952,10 +950,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "team_leave",
     label: "Team Leave",
-    description: "离开当前 team:断开连接并删除本机配置。不影响 broker 或其它节点。",
-    promptSnippet: "team_leave(team?) — 离开 team",
+    description: t(M.agent.leaveDescription),
+    promptSnippet: t(M.agent.leaveSnippet),
     parameters: Type.Object({
-      team: Type.Optional(Type.String({ description: "要离开的 team 名,省略则离开当前" })),
+      team: Type.Optional(Type.String({ description: t(M.agent.leaveTeamParam) })),
     }),
 
     renderCall(args, theme) {
@@ -984,11 +982,11 @@ export default function (pi: ExtensionAPI) {
     name: "team_label",
     label: "Team Label",
     description:
-      "管理本节点的标签,用于被别人按 @label 群发。add/remove 会重连 broker(标签是 broker 侧的分组依据)。",
-    promptSnippet: "team_label(action, labels?) — 管理本节点标签",
+      t(M.agent.labelDescription),
+    promptSnippet: t(M.agent.labelSnippet),
     parameters: Type.Object({
-      action: Type.String({ description: "'list'、'add' 或 'remove'" }),
-      labels: Type.Optional(Type.String({ description: "逗号分隔的标签名" })),
+      action: Type.String({ description: t(M.agent.actionParam) }),
+      labels: Type.Optional(Type.String({ description: t(M.agent.labelListParam) })),
     }),
 
     renderCall(args, theme) {
