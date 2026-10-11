@@ -43,13 +43,16 @@ for (const locale of ['en-US', 'zh-Hans']) {
       registerFlag() {}, registerCommand() {}, registerEntryRenderer() {} });
     const prompt = (await handlers.get('before_agent_start')({systemPrompt: 'opaque用户'})).systemPrompt;
     assert.ok(prompt.startsWith('opaque用户'));
-    const authored = prompt.slice('opaque用户'.length) + JSON.stringify(tools.map(({description,promptSnippet,parameters}) => ({description,promptSnippet,parameters})));
+    const authored = prompt.slice('opaque用户'.length) + JSON.stringify(tools.map(({description,promptSnippet,promptGuidelines,parameters}) => ({description,promptSnippet,promptGuidelines,parameters})));
     if (locale === 'en-US') {
       assert.doesNotMatch(authored, /[\u3400-\u9fff]/);
       assert.match(prompt, /no other nodes online/i);
     } else {
       assert.match(prompt, /无其他节点在线/);
-      for (const tool of tools) assert.match(tool.description, /[\u3400-\u9fff]/);
+      for (const tool of tools) {
+        assert.match(tool.description, /[\u3400-\u9fff]/);
+        for (const guideline of tool.promptGuidelines ?? []) assert.match(guideline, /[\u3400-\u9fff]/);
+      }
     }
     assert.ok(tools.find(t => t.name === 'team_send').parameters.properties.text.description);
   });

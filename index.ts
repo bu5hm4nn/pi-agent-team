@@ -737,15 +737,15 @@ export default function (pi: ExtensionAPI) {
   // ---- 工具入口(给模型和自动化)
   pi.registerTool({
     name: "team_send",
-    label: "Team Send",
+    label: t(M.agent.sendLabel),
     description:
       t(M.agent.sendDescription),
     promptSnippet: t(M.agent.sendSnippet),
     promptGuidelines: [
-      "Use team_send only when the task spans another machine; each recipient costs a full model turn.",
-      "Replies are NOT automatic: when a teammate's message needs an answer, call team_send to answer it. Sending back to the same peer links it to their request automatically.",
-      "You can ignore a teammate's message when no answer is needed; it will be reminded once, not repeatedly.",
-      "Broadcasting with '*' or '@label' wakes every matching node; prefer naming recipients.",
+      t(M.agent.sendCostGuideline),
+      t(M.agent.legacyReplyGuideline),
+      t(M.agent.legacyOptionalGuideline),
+      t(M.agent.broadcastGuideline),
     ],
     parameters: Type.Object({
       to: Type.String({ description: t(M.agent.toParam) }),
@@ -799,7 +799,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "team_roster",
-    label: "Team Roster",
+    label: t(M.agent.rosterLabel),
     description: t(M.agent.rosterDescription),
     promptSnippet: t(M.agent.rosterSnippet),
     parameters: Type.Object({}),
@@ -846,7 +846,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "team_info",
-    label: "Team Info",
+    label: t(M.agent.infoLabel),
     description: t(M.agent.infoDescription),
     promptSnippet: t(M.agent.infoSnippet),
     parameters: Type.Object({
@@ -885,7 +885,7 @@ export default function (pi: ExtensionAPI) {
    */
   pi.registerTool({
     name: "team_join",
-    label: "Team Join",
+    label: t(M.agent.joinLabel),
     description:
       t(M.agent.joinDescription) +
       t(M.agent.joinPreserve),
@@ -949,7 +949,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "team_leave",
-    label: "Team Leave",
+    label: t(M.agent.leaveLabel),
     description: t(M.agent.leaveDescription),
     promptSnippet: t(M.agent.leaveSnippet),
     parameters: Type.Object({
@@ -980,7 +980,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "team_label",
-    label: "Team Label",
+    label: t(M.agent.labelLabel),
     description:
       t(M.agent.labelDescription),
     promptSnippet: t(M.agent.labelSnippet),

@@ -17,6 +17,17 @@
  *   这个文件只放文案,不放逻辑。键的字面量只允许出现在 src/messages.js。
  */
 export const enUS = Object.freeze({
+  "agent.sendCostGuideline": "Use team_send only when the task spans another machine; each recipient costs a full model turn.",
+  "agent.legacyReplyGuideline": "Replies are NOT automatic: when a teammate's message needs an answer, call team_send to answer it. Sending back to the same peer links it to their request automatically.",
+  "agent.legacyOptionalGuideline": "You can ignore a teammate's message when no answer is needed; it will be reminded once, not repeatedly.",
+  "agent.broadcastGuideline": "Broadcasting with '*' or '@label' wakes every matching node; prefer naming recipients.",
+  "agent.sendLabel": "Team Send",
+  "agent.rosterLabel": "Team Roster",
+  "agent.infoLabel": "Team Info",
+  "agent.joinLabel": "Team Join",
+  "agent.leaveLabel": "Team Leave",
+  "agent.labelLabel": "Team Label",
+
   "agent.emptyRoster": "  (no other nodes online)",
   "agent.direct": "(direct connection)",
   "agent.online": "Online nodes:",

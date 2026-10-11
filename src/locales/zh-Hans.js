@@ -14,6 +14,17 @@
  *   键的字面量只允许出现在 src/messages.js。
  */
 export const zhHans = Object.freeze({
+  "agent.sendCostGuideline": "仅在任务涉及其他机器时使用 team_send;每个收件人都要花一轮完整思考。",
+  "agent.legacyReplyGuideline": "回复不会自动发送:队友消息需要回答时调用 team_send。发回同一队友会自动关联到其请求。",
+  "agent.legacyOptionalGuideline": "无需回答的队友消息可以忽略;最多提醒一次,不会反复打扰。",
+  "agent.broadcastGuideline": "用 '*' 或 '@label' 群发会唤醒所有匹配节点;优先点名收件人。",
+  "agent.sendLabel": "团队发送",
+  "agent.rosterLabel": "团队成员",
+  "agent.infoLabel": "团队状态",
+  "agent.joinLabel": "团队加入",
+  "agent.leaveLabel": "团队离开",
+  "agent.labelLabel": "团队标签",
+
   "agent.emptyRoster": "  (无其他节点在线)",
   "agent.direct": "(直接连接)",
   "agent.online": "在线节点:",

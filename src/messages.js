@@ -360,6 +360,17 @@ const options = Object.freeze({
 });
 
 const agent = Object.freeze({
+  sendCostGuideline: "agent.sendCostGuideline",
+  legacyReplyGuideline: "agent.legacyReplyGuideline",
+  legacyOptionalGuideline: "agent.legacyOptionalGuideline",
+  broadcastGuideline: "agent.broadcastGuideline",
+  sendLabel: "agent.sendLabel",
+  rosterLabel: "agent.rosterLabel",
+  infoLabel: "agent.infoLabel",
+  joinLabel: "agent.joinLabel",
+  leaveLabel: "agent.leaveLabel",
+  labelLabel: "agent.labelLabel",
+
   emptyRoster: "agent.emptyRoster",
   direct: "agent.direct",
   online: "agent.online",
