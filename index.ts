@@ -147,7 +147,7 @@ const envOf = () => ({
  */
 async function notifyInjectFailure(from: string, reason: string, ctx: ExtensionContext) {
   if (!from) return;
-  const text = `[系统] 你的消息没有送达 ${state.self}:注入失败(${reason})。请重发。`;
+  const text = t(M.agent.deliveryFailure, { self: state.self, reason });
 
   // 直接在传输层构造信封。inbound 的 id 已经记在 seen 里，不走
   // sendMessage —— 那样会把它当成一次普通发送而记入 outbound，
@@ -282,15 +282,14 @@ async function runIntentions(
         const payload = String(it.ref ?? "");
         const requestId = String(it.requestId ?? "");
         const how = requestId
-          ? `现在就回复它:team_reply({ requestId: ${JSON.stringify(requestId)}, text: "..." })。`
-          : `现在就回复它:team_reply({ requestId: "<注入消息里的 id>", text: "..." })。`;
+          ? t(M.agent.replyNow, { requestId: JSON.stringify(requestId) })
+          : t(M.agent.replyNowFallback, {  });
         try {
           apiRef?.sendMessage(
             {
               customType: TEAM_MESSAGE_TYPE,
               content:
-                `[team 待回复]${who.join(", ")} 之前发来的请求还没有回复。` +
-                `${how}如果本来就不需要回复,忽略这条即可。\n\n${payload}`,
+                t(M.agent.reminder, { who: who.join(", "), how, payload }),
               display: false,
             },
             { triggerTurn: true },
@@ -787,8 +786,8 @@ type Theme = { fg(color: string, text: string): string; bold(text: string): stri
  */
 function transmitToolParams() {
   return Type.Object({
-    to: Type.String({ description: "节点名、'@label'、'*'、'@default',或逗号分隔多收件人" }),
-    text: Type.String({ description: "消息内容:背景、期望产出、验收标准一次说清" }),
+    to: Type.String({ description: t(M.agent.toParam) }),
+    text: Type.String({ description: t(M.agent.textParam) }),
   });
 }
 
@@ -1169,30 +1168,30 @@ export default function (pi: ExtensionAPI) {
           .sort((a, b) => a.name.localeCompare(b.name))
           .map((m) => `  ${m.name}${m.host ? ` (${m.host})` : ""}${m.labels?.length ? ` [${m.labels.join(" ")}]` : ""}`)
           .join("\n")
-      : "  (无其他节点在线)";
+      : t(M.agent.emptyRoster);
 
     const note = [
       "",
       "## Team",
-      `你是多机 Pi 集群的一员。节点名 \`${state.self}\`,team \`${currentTeam ?? "(直接连接)"}\`,模式 \`${mode}\`。`,
-      state.selfLabels?.length ? `你的标签:${state.selfLabels.join(", ")}` : "",
+      t(M.agent.identity, { self: state.self, team: currentTeam ?? t(M.agent.direct), mode }),
+      state.selfLabels?.length ? t(M.agent.selfLabels, { labels: state.selfLabels.join(", ") }) : "",
       "",
-      "在线节点:",
+      t(M.agent.online),
       roster,
-      labels.length ? `可用分组:${labels.map((l) => `@${l}`).join(" ")}` : "",
+      labels.length ? t(M.agent.groups, { labels: labels.map((l) => `@${l}`).join(" ") }) : "",
       "",
-      "**发送**:默认用 `team_send({ to, text })` —— 送达并唤醒对方,但不要求回信。`to` 可以是节点名、`@label`(分组)、`\"*\"`(全员)、`\"@default\"`(默认组),或数组。",
-      "**要求回信**:需要对方回话时用 `team_ask({ to, text })` —— 对方未回复会被提醒一次。两者都立即返回投递回执,不会同步等答案;回信稍后作为一条 team 消息送到。",
-      "**回复队友**:要回复收到的请求,用 `team_reply({ requestId, text })`,requestId 就是注入消息里给出的那个。`team_send` / `team_ask` 都不会自动算作回复。回复本身不再要求对方回信,所以对话能停下来。",
-      "**有待回复时**:对方还有未回复的请求时,对它的 send/ask 会被拒绝(错误里会列出 request id),必须先用 `team_reply` 回掉;这不影响其他节点。",
-      "**查成员**:调用 `team_roster()`,或 `team_info({ what: \"peers\" })`。",
+      t(M.agent.sendGuide),
+      t(M.agent.askGuide),
+      t(M.agent.explicitReplyGuide),
+      t(M.agent.pendingGuide),
+      t(M.agent.rosterGuide),
       "",
-      "**接收**:输入里出现 `[来自 <名字> 的 team 消息]` 或 `[来自 <名字> 的 team 请求]` 前缀时,那是另一个 agent 发来的消息,不是真人打字。",
-      "按内容本身的意思回应:是任务就执行,是讨论就接着走。不要反问「需要我做什么」。",
-      "**回复要用 team_reply** —— 你这一轮的输出不会自动回传,也不需要额外指定发给谁(回复会自动送达原发信人)。",
-      "只有对方用 team_ask 发的消息才要求回复;team_send 的通知不需要回信,也不会有提醒。",
+      t(M.agent.incomingGuide),
+      t(M.agent.respondGuide),
+      t(M.agent.replyGuide),
+      t(M.agent.optionalReply),
       "",
-      "**克制**:每次发送都占用对方一轮完整思考,群发更贵。除非任务需要,不要主动发消息。",
+      t(M.agent.restraint),
       "",
     ]
       .filter((l) => l !== "")
@@ -1206,16 +1205,16 @@ export default function (pi: ExtensionAPI) {
   // 执行都共用同一套 helper —— 交付与群发确认路径不可能分叉。
   pi.registerTool({
     name: "team_send",
-    label: "Team Send",
+    label: t(M.agent.sendLabel),
     description:
-      "给同一 team 里的其他 Pi 节点发消息(默认不要求回信)。to 可以是节点名、'@label' 分组、'*' 全员、'@default' 默认组,或逗号分隔的名字数组。名字从 team_roster 或系统提示的 Team 段落获取。回复队友请用 team_reply。",
-    promptSnippet: "team_send(to, text) — 给一个或一组 Pi 节点发消息,默认不要求回信",
+      t(M.agent.sendDescription),
+    promptSnippet: t(M.agent.sendSnippet),
     promptGuidelines: [
-      "Use team_send only when the task spans another machine; each recipient costs a full model turn.",
-      "team_send is informational: it wakes the peer but does not ask for a reply and creates no reminder. Call team_ask when you actually need an answer.",
-      "team_send never counts as a reply: to answer a teammate's request use team_reply({ requestId, text }).",
-      "If a recipient has an unanswered request, team_send to it fails and lists the request id; reply with team_reply first.",
-      "Broadcasting with '*' or '@label' wakes every matching node; prefer naming recipients.",
+      t(M.agent.sendCostGuideline),
+      t(M.agent.sendInfoGuideline),
+      t(M.agent.sendReplyGuideline),
+      t(M.agent.sendGateGuideline),
+      t(M.agent.broadcastGuideline),
     ],
     parameters: transmitToolParams(),
     renderCall: (args, theme) => renderTransmitCall("team_send", false, args, theme),
@@ -1225,16 +1224,16 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "team_ask",
-    label: "Team Ask",
+    label: t(M.agent.askLabel),
     description:
-      "给同一 team 里的其他 Pi 节点发一条要求回信的消息:对方会被唤醒,如果没回复会被提醒一次。to 的写法和 team_send 相同。返回的是投递回执,不会同步等待答案 —— 回信会作为一条 team 消息稍后送到。回复队友请用 team_reply。",
-    promptSnippet: "team_ask(to, text) — 发一条要求对方回信的消息(未回复会被提醒一次)",
+      t(M.agent.askDescription),
+    promptSnippet: t(M.agent.askSnippet),
     promptGuidelines: [
-      "Use team_ask only when you actually need the peer's answer; each recipient costs a full model turn and an unanswered ask is reminded once.",
-      "team_ask returns immediately with a delivery receipt — it does not wait for the answer; the reply arrives later as an injected team message.",
-      "team_ask always starts a NEW request: it never counts as a reply to an earlier message. Answer a teammate with team_reply.",
-      "If a recipient has an unanswered request, team_ask to it fails and lists the request id; reply with team_reply first.",
-      "A reply never asks for a reply, so conversations still end.",
+      t(M.agent.askCostGuideline),
+      t(M.agent.askReceiptGuideline),
+      t(M.agent.askNewGuideline),
+      t(M.agent.askGateGuideline),
+      t(M.agent.replyEndsGuideline),
     ],
     parameters: transmitToolParams(),
     renderCall: (args, theme) => renderTransmitCall("team_ask", true, args, theme),
@@ -1244,19 +1243,19 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "team_reply",
-    label: "Team Reply",
+    label: t(M.agent.replyLabel),
     description:
-      "回复一条来自队友的 team 请求,按注入消息里给出的 requestId 精确回复。requestId 是必需的:未知/已回复/过期的 id 会被拒绝,不会发出任何消息。回复会送达原发信人,且不会再要求对方回信。待回复的请求必须用这个工具回掉 —— team_send / team_ask 都不会自动算作回复。",
-    promptSnippet: "team_reply(requestId, text) — 回复一条队友请求(用注入消息里的 requestId)",
+      t(M.agent.replyDescription),
+    promptSnippet: t(M.agent.replySnippet),
     promptGuidelines: [
-      "Use team_reply — not team_send — to answer a teammate; pass the exact requestId from the injected [team request] message.",
-      "requestId is required and must be an existing unanswered request: an unknown, already-answered, or stale id fails and sends nothing.",
-      "The reply goes back to the original sender (no recipient guessing) and never requests a further reply.",
-      "If team_send/team_ask fails because a reply is pending, answer the listed request with team_reply first.",
+      t(M.agent.replyIdGuideline),
+      t(M.agent.replyValidGuideline),
+      t(M.agent.replyRecipientGuideline),
+      t(M.agent.replyGateGuideline),
     ],
     parameters: Type.Object({
-      requestId: Type.String({ description: "要回复的请求 id:注入消息 [team 请求] / [team 消息] 里给出的那个" }),
-      text: Type.String({ description: "回复内容" }),
+      requestId: Type.String({ description: t(M.agent.requestIdParam) }),
+      text: Type.String({ description: t(M.agent.replyTextParam) }),
     }),
     renderCall: (args, theme) =>
       new Text(
@@ -1273,9 +1272,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "team_roster",
-    label: "Team Roster",
-    description: "列出在线节点及其所在机器和标签。用于按机器或标签挑选收件人,或确认谁在线。",
-    promptSnippet: "team_roster() — 列出在线节点与标签",
+    label: t(M.agent.rosterLabel),
+    description: t(M.agent.rosterDescription),
+    promptSnippet: t(M.agent.rosterSnippet),
     parameters: Type.Object({}),
 
     renderCall(_args, theme) {
@@ -1308,9 +1307,9 @@ export default function (pi: ExtensionAPI) {
             text: members.length
               ? [
                   ...members.map((m) => `${m.name}${m.labels.length ? ` [${m.labels.join(" ")}]` : ""} host=${m.host ?? "?"}`),
-                  labels.length ? `\n可用分组:${labels.map((l) => `@${l}`).join(" ")}` : "",
+                  labels.length ? t(M.agent.rosterGroups, { labels: labels.map((l) => `@${l}`).join(" ") }) : "",
                 ].join("\n")
-              : "没有其他节点在线",
+              : t(M.agent.noPeers),
           },
         ],
         details: { members, labels },
@@ -1320,11 +1319,11 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "team_info",
-    label: "Team Info",
-    description: "查看本节点在 team 里的状态:team 名、连接状态、broker、在线数量、回信提醒模式。",
-    promptSnippet: "team_info() — 查看 team 状态",
+    label: t(M.agent.infoLabel),
+    description: t(M.agent.infoDescription),
+    promptSnippet: t(M.agent.infoSnippet),
     parameters: Type.Object({
-      what: Type.Optional(Type.String({ description: "'status'(默认)或 'peers'" })),
+      what: Type.Optional(Type.String({ description: t(M.agent.whatParam) })),
     }),
 
     renderCall(args, theme) {
@@ -1359,36 +1358,36 @@ export default function (pi: ExtensionAPI) {
    */
   pi.registerTool({
     name: "team_join",
-    label: "Team Join",
+    label: t(M.agent.joinLabel),
     description:
-      "加入一个 team 并连接。首选方式是把创建时打印的 punch URI 传给 punch 参数 —— 一条 URI 就够,不需要 team/token/url/seeds。" +
-      "也可以用 team 名:已在本机配置里时只需 team 名;首次加入需要 token,以及 url(broker)或 seeds(mesh/swim)。" +
-      "改 mode 或 seeds 也用它 —— 已有的 url/token 会保留。",
+      t(M.agent.joinDescription) +
+      t(M.agent.joinByName) +
+      t(M.agent.joinPreserve),
     promptSnippet:
-      "team_join(punch?) 或 team_join(team, token?, url?, mode?, seeds?, name?, labels?, port?) — 加入或重新配置 team",
+      t(M.agent.joinSnippet),
     parameters: Type.Object({
-      team: Type.Optional(Type.String({ description: "team 名(小写字母数字)。给了 punch URI 时可省略" })),
+      team: Type.Optional(Type.String({ description: t(M.agent.teamParam) })),
       punch: Type.Optional(
-        Type.String({ description: "punch://<team>/<topic>/<token> —— 创建时打印的 URI。给了它就不需要 team/token/url/seeds" }),
+        Type.String({ description: t(M.agent.punchParam) }),
       ),
-      token: Type.Optional(Type.String({ description: "team token,首次加入时必需(用 punch URI 时由 URI 携带)" })),
-      url: Type.Optional(Type.String({ description: "broker 地址,broker 模式必需,例如 http://100.64.0.1:8787" })),
+      token: Type.Optional(Type.String({ description: t(M.agent.tokenParam) })),
+      url: Type.Optional(Type.String({ description: t(M.agent.urlParam) })),
       mode: Type.Optional(
         Type.Union(
           [Type.Literal("broker"), Type.Literal("mesh"), Type.Literal("swim"), Type.Literal("hyperswarm")],
-          { description: "投递模式。broker 经中转;mesh/swim 节点直连,需要 seeds;hyperswarm 无服务器,用 punch URI 加入" },
+          { description: t(M.agent.modeParam) },
         ),
       ),
       seeds: Type.Optional(
-        Type.Array(Type.String(), { description: "mesh/swim 的种子地址,形如 100.64.0.1:19801" }),
+        Type.Array(Type.String(), { description: t(M.agent.seedsParam) }),
       ),
-      name: Type.Optional(Type.String({ description: "本节点名。只影响本次运行,不写入配置" })),
-      labels: Type.Optional(Type.Array(Type.String(), { description: "本节点标签,供 @label 群发" })),
+      name: Type.Optional(Type.String({ description: t(M.agent.nameParam) })),
+      labels: Type.Optional(Type.Array(Type.String(), { description: t(M.agent.labelsParam) })),
       port: Type.Optional(
-        Type.Number({ description: "mesh/swim 的监听端口。只影响本次运行。0 = 让内核分配(默认)" }),
+        Type.Number({ description: t(M.agent.portParam) }),
       ),
       listen: Type.Optional(
-        Type.String({ description: "mesh/swim 的监听地址,默认 0.0.0.0。只影响本次运行" }),
+        Type.String({ description: t(M.agent.listenParam) }),
       ),
     }),
 
@@ -1434,11 +1433,11 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "team_leave",
-    label: "Team Leave",
-    description: "离开当前 team:断开连接并删除本机配置。不影响 broker 或其它节点。",
-    promptSnippet: "team_leave(team?) — 离开 team",
+    label: t(M.agent.leaveLabel),
+    description: t(M.agent.leaveDescription),
+    promptSnippet: t(M.agent.leaveSnippet),
     parameters: Type.Object({
-      team: Type.Optional(Type.String({ description: "要离开的 team 名,省略则离开当前" })),
+      team: Type.Optional(Type.String({ description: t(M.agent.leaveTeamParam) })),
     }),
 
     renderCall(args, theme) {
@@ -1465,13 +1464,13 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "team_label",
-    label: "Team Label",
+    label: t(M.agent.labelLabel),
     description:
-      "管理本节点的标签,用于被别人按 @label 群发。add/remove 会重连 broker(标签是 broker 侧的分组依据)。",
-    promptSnippet: "team_label(action, labels?) — 管理本节点标签",
+      t(M.agent.labelDescription),
+    promptSnippet: t(M.agent.labelSnippet),
     parameters: Type.Object({
-      action: Type.String({ description: "'list'、'add' 或 'remove'" }),
-      labels: Type.Optional(Type.String({ description: "逗号分隔的标签名" })),
+      action: Type.String({ description: t(M.agent.actionParam) }),
+      labels: Type.Optional(Type.String({ description: t(M.agent.labelListParam) })),
     }),
 
     renderCall(args, theme) {

@@ -170,7 +170,7 @@ async function harness(t) {
 
 const call = (name, args) => ({ name, args });
 const application = node => node.received.filter(e => e.from !== "broker");
-const reminders = node => node.injected.filter(m => m.content.startsWith("[team 待回复]"));
+const reminders = node => node.injected.filter(m => m.content.startsWith("[Team awaiting reply]"));
 
 test("四节点真实工具：并发请求溢出、精确回复、阻断、一次提醒与竞争", {
   skip: runnable ? false : "Requires native registerHooks and default TypeScript stripping",
@@ -266,7 +266,7 @@ test("四节点真实工具：并发请求溢出、精确回复、阻断、一�
   assert.equal(expectedWrites, 87);
   for (const n of h.nodes) {
     assert.deepEqual(application(n).map(e => e.id).sort(), sent.filter(e => e.to === n.name).map(e => e.id).sort(), `${n.name}: exact deliveries, no duplicates`);
-    const payloads = n.injected.filter(m => !m.content.startsWith("[team 待回复]"));
+    const payloads = n.injected.filter(m => !m.content.startsWith("[Team awaiting reply]"));
     assert.equal(payloads.length, application(n).length, `${n.name}: every received message reaches model context once`);
     for (const envelope of application(n)) {
       const matching = payloads.filter(m => m.content.split("\n").includes(envelope.body.text));

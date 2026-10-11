@@ -1,145 +1,104 @@
 ---
 name: pi-agent-team
-description: 与其他 Pi 节点(可能在别的机器,也可能是同一台机器上的另一个 Pi)互相通信。当需要把工作派给另一个节点、群发给一组节点、回复队友请求、或收到 `[来自 <名字> 的 team 消息]` / `[来自 <名字> 的 team 请求]` / `[来自 <名字> 的 team 回复]` 前缀的输入时使用。
+description: Communicate with other Pi nodes, on the same or different machines. Use when delegating work, messaging a group, or receiving a Team message/request/reply header (including localized equivalents).
 ---
 
 # Pi Agent Team
 
-你可能是多节点 Pi 团队的一员。每个节点是**另一个正在运行的 Pi**,
-有独立的会话和上下文;它们可能在别的机器上,也可能和你在同一台机器上。
-身份是**节点名**,不是 IP。
+Each node is another running Pi with its own session and context. Identify nodes
+by name, not IP. Follow the human conversation language; team semantics do not
+change with language.
 
-## 判断自己是否在团队里
+## Check membership
 
-系统提示里有 `## Team` 段落,就说明你在团队里。那里列出了:
+The system prompt's `## Team` section lists your node name and labels, online
+nodes grouped by host, and available `@label` groups. Without that section, do
+not call `team_send`. Get recipient names from the roster; never guess them.
 
-- 本节点名和标签
-- 在线节点,按机器分组
-- 可用的 `@分组`
+## Join and configure
 
-没有 `## Team` 段时不要调用 `team_send` —— 必然失败。
+Use `team_join` to join or change configuration. Prefer the punch URI printed
+when a hyperswarm team is created; it replaces team/token/url/seeds:
 
-## 模式和团队配置
-
-团队有四种连接模式,由统一配置决定。加入一个已有房间,首选是把创建时
-打印的 punch URI 直接交给 `team_join` —— 一条 URI 就够:
-
-```
-team_join({ punch: "punch://dev/<topic>/<token>" })                    // 无服务器(hyperswarm)
-team_join({ team: "dev", token: "...", url: "http://100.64.0.1:8787" })  // broker
-team_join({ team: "dev", token: "...", mode: "mesh", seeds: ["100.64.0.1:19801"] })  // 直连
-team_join({ team: "dev", token: "...", mode: "swim", seeds: ["100.64.0.1:7946"] })   // SWIM 管成员
+```js
+team_join({ punch: "punch://dev/<topic>/<token>" })
+team_join({ team: "dev", token: "...", url: "http://100.64.0.1:8787" })
+team_join({ team: "dev", token: "...", mode: "mesh", seeds: ["100.64.0.1:19801"] })
+team_join({ team: "dev", token: "...", mode: "swim", seeds: ["100.64.0.1:7946"] })
 ```
 
-用 `punch` 时不需要再给 `team` / `token` / `url` / `seeds` —— 它们都在 URI 里。
+- `mode`, `seeds`, and `topic` persist in local team config.
+- `name`, `labels`, `port`, and `listen` affect only this run. Multiple Pi nodes
+  may share one machine's config; persisting identities or ports would collide.
+- Changing `mode` preserves existing `url` and `token`.
+- Use `team_info` for configuration/status and `team_roster` for online nodes.
+- Never guess tokens or addresses. Ask the user for missing credentials.
 
-- `mode`、`seeds`、`topic` 会写进本机 team 配置,下次启动不用再给。
-- `name`、`labels`、`port`、`listen` **只影响本次运行**,不落盘 ——
-  同一台机器可以有多个 Pi,它们共用一份配置。节点名存进去会让第二个
-  agent 覆盖第一个;端口存进去会让它监听一个已被占用的端口。
-- 改 `mode` 不会动已有的 `url` / `token`。
-- 需要看当前配置用 `team_info`;列在线节点用 `team_roster`。
+## Send
 
-**不要**为了连上团队去猜 token 或地址 —— 那属于用户的凭据,缺什么就问用户。
+Use `team_send({ to, text })`. Recipients can be a node name (`"laptop-web"`),
+comma-separated names (`"web1,db1"`), a label (`"@web"`), or everyone else (`"*"`).
+`"@default"` selects the default group.
 
-## 发送
-
-用 `team_send` 工具,`to` 有四种写法:
-
-| 写法 | 含义 |
-|---|---|
-| `"laptop-web"` | 单个节点 |
-| `"web1,db1"` | 多个指定节点 |
-| `"@web"` | 标签为 `web` 的所有节点 |
-| `"*"` | 除你以外的所有节点 |
-
-```
-team_send({ to: "dev01-api", text: "在 dev 分支跑一下集成测试,把失败用例列给我" })
-team_send({ to: "@web", text: "前端依赖升级了,各自重新构建一次" })
+```js
+team_send({ to: "dev01-api", text: "Run integration tests on dev and report failures." })
+team_send({ to: "@web", text: "Frontend dependencies changed; rebuild your projects." })
 ```
 
-- 名字从 `## Team` 段里取,不要自己拼、不要猜。
-- **三个工具:** `team_send` 只送达并唤醒对方,不要求回信;确实需要对方
-  回话时用 `team_ask`:它同样立即返回投递回执,不会同步等答案;对方不
-  回复会被提醒一次。要回复队友的请求用 `team_reply({ requestId, text })`,
-  requestId 就是注入消息里给出的那个。
+Be sparing with broadcasts: each recipient spends a full reasoning turn and
+its own tokens. Success means the local transport accepted the message,
+not that the peer received or processed it.
 
-  ```
-  team_send({ to: "dev01-api", text: "在 dev 分支跑一下集成测试,把失败用例列给我" })
-  team_ask({ to: "dev01-api", text: "跑完把失败用例发我" })
-  team_reply({ requestId: "m-...", text: "跑完了,3 个用例失败:..." })
-  ```
+## Send, ask, and reply
 
-- **回复只能用 `team_reply`。** `team_send` / `team_ask` 都是**新消息**,
-  永远不会被当成对旧消息的回复。reply 会自动送达请求的原发信人,不用
-  再填 `to`。
-- **对方还有未回复的请求时,`team_send` / `team_ask` 到那个人会被拒绝**,
-  错误里会列出 request id。先用 `team_reply` 把它回掉;不相关的人不受影响。
-  群发里有任何一个人被阻断时整次都拒绝,不会部分发送。
+- `team_send` wakes the peer but does not require a reply or create a reminder.
+- `team_ask({ to, text })` requests an answer and reminds the peer once if it
+  remains unanswered. It returns a delivery receipt immediately, not the answer.
+- `team_reply({ requestId, text })` answers exactly one request. Copy the exact
+  requestId from the injected message; the reply goes to the original sender.
+  Unknown, already-answered, or stale ids fail without sending anything.
 
-- **群发要克制。** `@标签` 和 `*` 会让每个收件人都跑一轮完整思考,
-  花各自的 token。能点名就点名。
-- 工具返回成功只表示本地传输已接受,**不表示对方已收到或处理**。
+Both send and ask create **new messages**, never replies. If a peer has an
+unanswered request, send/ask to that peer is rejected with its request id;
+reply first. Unrelated peers are unaffected. A broadcast with any blocked
+recipient is rejected as a whole, not partially sent. Group recipients are
+frozen at dispatch time.
 
-## 收到请求
+## Receive and reply
 
-```
-[来自 laptop-web 的 team 消息]
-帮我在 dev 分支跑一下集成测试
-```
+A `[Team message from <name>]` or `[Team request from <name>]` header (including
+localized equivalents) marks another agent's message, not a human typing. Act
+on its content; do not greet, repeat an acknowledgement, or ask "What should I
+do?" Busy peers see messages at a turn boundary without interrupting tool calls.
 
-这是另一个 agent 发来的**消息**,不是真人打字。
+Your turn output is **not** sent back automatically. Only asks require replies;
+notifications do not need acknowledgements. To reply explicitly:
 
-- 直接办事,不要问候,不要反问"需要我做什么",也不要复述确认。
-- **默认不要求你回信。** 注入文本会说"没有要求回复"——那种情况直接处理,
-  不要为了确认而回信。只有对方用 `team_ask` 发来的消息才要求回复。
-- **要回复时,用 `team_reply` 并带上注入文本里的 request id** —— 你这一轮的
-  输出不会自动回传:
-
-  ```
-  team_reply({ requestId: "m-abc123", text: "跑完了,3 个用例失败:..." })
-  ```
-
-  它会自动送达原发信人,并只把这一条请求标记为已回复(同一队友还有别的
-  请求时会保留)。未要求回信的通知也可以这样可选回复。
-- **不需要回复的可以不管**(纯通知、寒暄)。系统最多提醒一次,不会反复打扰。
-- 忙的时候消息会先排着,不打断你手上的工具调用;等你这一轮告一段落才会看到。
-
-## 收到回复
-
-```
-[来自 dev01-api 的 team 回复]
-3 个用例失败:...
----
-上面是 teammate dev01-api 对你的消息的回复(不是真人用户)。这是回复,不需要再回复。
+```js
+team_reply({ requestId: "m-abc123", text: "Finished: three tests failed: ..." })
 ```
 
-这是对方对**你之前发出的消息**的回复。
+This answers only that request, leaving any others from the same peer pending.
+An informational message can also be answered optionally using its requestId.
+Pending obligations retain their requestId even when old message bodies are
+compacted. Use the id, never guess a recipient or replace the reply with send/ask.
 
-- **收到回复不需要再回。** 对话到此自然结束 —— 这也是它不会打转的原因。
-- 如果确实需要继续(追问、下一步任务),显式调用 `team_send` / `team_ask`。
-- 回复自带上下文:它回的就是你之前那条消息。
+A `[Team reply from <name>]` header (or a localized equivalent) marks a reply.
+**Replies need no further reply.** Use send/ask again only for a genuine follow-up
+or new task; otherwise the conversation stops instead of looping.
 
-只有 **team_ask** 发来的消息需要回复;`team_send` 的通知与 `team_reply` 的回复都不需要 —— 这个区分很重要。
-不该回的时候回了,两边会 "消息→回复→回复的回复…" 一路打转,只能靠跳数上限兜住。
+## Delegate effectively
 
-## 派活的正确姿势
+Cross-node communication takes seconds and starts a full reasoning turn.
+Include background, desired output, and acceptance criteria in one message.
+Delegate complete work units rather than high-frequency back-and-forth. The
+recipient may be busy; continue your own work after sending.
 
-跨节点通信延迟是**秒级**,对端要起一整轮思考。所以:
+## Offline peers and boundaries
 
-- **一次说清**:背景、期望产出、验收标准一起给。
-- 不要拿 team 消息做高频来回的同步。多轮协作先拆任务,一次派一个完整单元。
-- 对端可能忙。忙时你的消息会排在它的下一个 turn 开头,不会打断它手上的
-  工具调用,也不会把它的原任务挤乱。发完继续自己的活。
+If delivery fails or a node is not found, check the roster or do the work
+locally. The broker has no offline queue; undelivered messages are lost.
 
-## 对端离线
-
-工具返回失败、或看到"找不到 X(不在线或名字写错)"时,那个节点不在。
-broker **不做离线队列**,消息直接丢了。先看 `## Team` 段确认谁在线,
-或者自己把活干了。
-
-## 边界
-
-- 消息是**明文**经过 broker 的(链路本身有 WireGuard 加密)。
-  不要在消息里放密钥、凭据。
-- 对端**看不到**你这边的对话历史。发消息时要带上必要的背景。
+Broker messages are plaintext at the broker (the underlying tailnet link is
+WireGuard-encrypted). Do not send secrets or credentials. Peers cannot see
+your conversation history; include the context they need.

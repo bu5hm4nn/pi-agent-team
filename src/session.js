@@ -371,29 +371,16 @@ export function classifyInbound(s, env) {
 /** 构造注入给模型的文本。要求回信与不要求回信的措辞必须不同,见 classifyInbound 注释。 */
 export function buildPayload(from, text, cls, requestId = null) {
   if (cls.kind === "reply") {
-    return (
-      `[来自 ${from} 的 team 回复]\n${text}\n\n---\n` +
-      `上面是 teammate ${from} 对你的消息的回复(不是真人用户)。这是回复,不需要再回复。`
-    );
+    return t(M.agent.replyPayload, { from, text });
   }
 
-  // 指令要短、要唯一:模型看到的就是这一句。要求回信时给出 request id
-  // 让它能直接调 team_reply;未要求回信时明确说无需回信,但仍给出可选的
-  // 显式回复方式(基于同一 request id),这样主动回报不会退化成新请求。
+  // requestId 仍以 JSON 字面量传给模型,不改变关联/去重语义。
   const replyLine = requestId
-    ? cls.requireResponse === true
-      ? `要回复,显式调用 team_reply({ requestId: ${JSON.stringify(requestId)}, text: "..." })。`
-      : `这条消息没有要求回复,无需回信。如确需回复,可调用 team_reply({ requestId: ${JSON.stringify(requestId)}, text: "..." })。`
-    : cls.requireResponse === true
-      ? `要回复,显式调用 team_reply({ text: "..." })。`
-      : `这条消息没有要求回复,无需回信。`;
-
-  const head = cls.requireResponse === true ? `[来自 ${from} 的 team 请求]` : `[来自 ${from} 的 team 消息]`;
-  return (
-    `${head}\n${text}\n\n---\n` +
-    `上面是 teammate ${from} 发来的消息原文(不是真人用户)。按内容本身的意思回应:是任务就执行,是讨论就接着走;不要反问"需要我做什么"。\n` +
-    `你这一轮的输出【不会】自动回传给 ${from}。${replyLine}`
-  );
+    ? t(cls.requireResponse === true ? M.agent.requiredReply : M.agent.optionalExplicitReply,
+        { requestId: JSON.stringify(requestId) })
+    : t(cls.requireResponse === true ? M.agent.requiredReplyFallback : M.agent.noReplyRequired);
+  const head = t(cls.requireResponse === true ? M.agent.requestHeader : M.agent.messageHeader, { from });
+  return t(M.agent.requestPayload, { head, text, from, replyLine });
 }
 
 export function excerpt(text, max = 120) {
