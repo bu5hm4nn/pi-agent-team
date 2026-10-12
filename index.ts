@@ -178,6 +178,7 @@ type IntentOutcome = { notes: string[]; failures: SendFailure[] };
 async function runIntentions(
   intentions: Array<Record<string, unknown>>,
   ctx: ExtensionContext,
+  source: "tool" | "command" = "command",
 ): Promise<IntentOutcome> {
   const notes: string[] = [];
   const failures: SendFailure[] = [];
@@ -194,6 +195,8 @@ async function runIntentions(
         break;
 
       case "card":
+        // Tool calls already display outgoing text; retain all other cards.
+        if (source === "tool" && (it.kind === "send" || it.kind === "reply")) break;
         showCard({
           kind: it.kind as CardKind,
           peer: String(it.peer),
@@ -312,6 +315,7 @@ async function runIntentions(
 async function runParty(
   party: Record<string, unknown> | undefined,
   ctx: ExtensionContext,
+  source: "tool" | "command" = "command",
 ): Promise<{ proceeded: boolean } & IntentOutcome> {
   const done = { proceeded: true, notes: [] as string[], failures: [] as SendFailure[] };
   if (!party) return done;
@@ -384,7 +388,7 @@ async function runParty(
         return { proceeded: false, notes: [], failures: [{ to, requestId: null, error: r.error! }] };
       }
       // 确认后自己跑意图;写入失败必须传回 invoke,不能静默吞掉。
-      const outcome = await runIntentions(r.intentions ?? [], ctx);
+      const outcome = await runIntentions(r.intentions ?? [], ctx, source);
       return { proceeded: outcome.failures.length === 0, ...outcome };
     }
   }
@@ -395,18 +399,19 @@ async function runParty(
 async function invoke(
   input: { sub: string; args: string[]; origin?: "user" | "model" },
   ctx: ExtensionContext,
+  source: "tool" | "command" = "command",
 ) {
   ctxRef = ctx;
   const r = dispatch(input, state, envOf());
 
   if (!r.ok) return { ok: false, lines: [] as string[], error: r.error!, notes: [] as string[] };
 
-  const partyResult = await runParty(r.party, ctx);
+  const partyResult = await runParty(r.party, ctx, source);
 
   // confirmBulk 时 party 已经执行过 intentions,不要再执行一次
   const outcome = r.party?.kind === "confirmBulk"
     ? { notes: partyResult.notes, failures: partyResult.failures }
-    : await runIntentions(r.intentions ?? [], ctx);
+    : await runIntentions(r.intentions ?? [], ctx, source);
 
   renderStatus();
 
@@ -849,7 +854,7 @@ function makeTransmitExecute(sub: "send" | "ask") {
     ctx: ExtensionContext,
   ) => {
     ctxRef = ctx;
-    const r = await invoke({ sub, args: [params.to, params.text], origin: "model" }, ctx);
+    const r = await invoke({ sub, args: [params.to, params.text], origin: "model" }, ctx, "tool");
 
     if (!r.ok) {
       return {
@@ -877,7 +882,7 @@ function makeReplyExecute() {
     ctx: ExtensionContext,
   ) => {
     ctxRef = ctx;
-    const r = await invoke({ sub: "reply", args: [params.requestId, params.text], origin: "model" }, ctx);
+    const r = await invoke({ sub: "reply", args: [params.requestId, params.text], origin: "model" }, ctx, "tool");
 
     if (!r.ok) {
       return {
