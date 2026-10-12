@@ -33,7 +33,7 @@ const TRANSPORT_SUFFIX = "/src/transport.js";
 const TYPEBOX_SUFFIX = "/typebox/index.js";
 
 /** fake transport 把每次投递记在这里,测试直接读。 */
-globalThis.__piTeamHarness = { sent: [], attempts: [], messages: [], sendResult: true, sendThrows: false };
+globalThis.__piTeamHarness = { sent: [], attempts: [], messages: [], entries: [], sendResult: true, sendThrows: false };
 const harness = globalThis.__piTeamHarness;
 
 const FAKE_TYPEBOX = `
@@ -135,7 +135,7 @@ function fakePi() {
     sendMessage(msg) {
       globalThis.__piTeamHarness.messages.push(msg);
     },
-    appendEntry() {},
+    appendEntry(type, data) { harness.entries.push({ type, data }); },
   };
   return { pi, tools, commands, handlers };
 }
@@ -635,4 +635,81 @@ test("repair: exact IDs do not alias and injected instructions safely encode IDs
   const numericId = await tools.get("team_reply").execute("clean", { requestId: "123", text: "done" }, undefined, undefined, ctx);
   assert.equal(numericId.details.delivered, true);
   await tools.get("team_reply").execute("clean", { requestId: unusual, text: "done" }, undefined, undefined, ctx);
+});
+
+// Presentation regressions: exercise registered entrypoints, not a filtering helper.
+for (const sub of ["send", "ask", "reply"]) {
+  for (const source of ["tool", "command"]) {
+    test(`presentation: ${source} ${sub} writes once and preserves only command cards`, { skip: SKIP }, async () => {
+      const { tools, commands, ctx } = await build();
+      repairRoster(["display-peer"]);
+      const requestId = `display-${source}-${sub}`;
+      if (sub === "reply") repairAsk("display-peer", requestId);
+      harness.entries.length = 0;
+      harness.sent.length = 0;
+      harness.attempts.length = 0;
+      const text = "Full outgoing text with another line";
+      if (source === "tool") {
+        const params = sub === "reply" ? { requestId, text } : { to: "display-peer", text };
+        const result = await tools.get(`team_${sub}`).execute("display", params, undefined, undefined, ctx);
+        assert.equal(result.details.delivered, true);
+        assert.match(result.content[0].text, /receipt only means the local transport accepted it/);
+        if (sub === "reply") assert.equal(result.details.requestId, requestId);
+      } else {
+        await commands.get("team").handler(`${sub} ${sub === "reply" ? requestId : "display-peer"} ${text}`, ctx);
+      }
+      assert.equal(harness.attempts.length, 1);
+      assert.equal(harness.sent.length, 1);
+      assert.equal(harness.sent[0].body.text, text);
+      assert.equal(harness.sent[0].re, sub === "reply" ? requestId : null);
+      assert.equal(harness.entries.length, source === "tool" ? 0 : 1);
+      if (source === "command") {
+        assert.equal(harness.entries[0].type, "team-message");
+        assert.equal(harness.entries[0].data.kind, sub === "reply" ? "reply" : "send");
+        assert.equal(harness.entries[0].data.text, text);
+      }
+    });
+  }
+}
+
+for (const source of ["tool", "command"]) {
+  test(`presentation: ${source} bulk confirmation retains routing across await`, { skip: SKIP }, async () => {
+    const { tools, commands } = await build();
+    repairRoster(Array.from({ length: 6 }, (_, i) => `display-bulk-${i}`));
+    for (const sub of ["send", "ask"]) {
+      harness.entries.length = 0;
+      harness.sent.length = 0;
+      let confirmations = 0;
+      const ctx = fakeCtx({ confirm: async () => { await Promise.resolve(); confirmations++; return true; } });
+      if (source === "tool") {
+        const result = await tools.get(`team_${sub}`).execute("bulk", { to: "*", text: "bulk text" }, undefined, undefined, ctx);
+        assert.equal(result.details.delivered, true);
+      } else await commands.get("team").handler(`${sub} * bulk text`, ctx);
+      assert.equal(confirmations, 1);
+      assert.equal(harness.sent.length, 1);
+      assert.equal(harness.sent[0].body.requireResponse, sub === "ask" ? true : undefined);
+      assert.equal(harness.entries.length, source === "tool" ? 0 : 1);
+    }
+  });
+}
+
+test("presentation: incoming cards and settled reminders survive tool execution", { skip: SKIP }, async () => {
+  const { tools, handlers, ctx } = await build();
+  repairRoster(["incoming-display", "unrelated-display"]);
+  harness.entries.length = 0;
+  harness.messages.length = 0;
+  repairAsk("incoming-display", "incoming-display-id");
+  assert.equal(harness.entries.length, 1);
+  assert.equal(harness.entries[0].data.kind, "receive");
+  assert.match(harness.messages[0].content, /incoming-display-id/);
+  for (const fn of handlers.get("message_end") ?? []) await fn({ message: { role: "custom", ...harness.messages[0] } });
+  await tools.get("team_send").execute("unrelated", { to: "unrelated-display", text: "notice" }, undefined, undefined, ctx);
+  assert.equal(harness.entries.length, 1);
+  for (const fn of handlers.get("agent_settled") ?? []) await fn({}, ctx);
+  assert.equal(harness.messages.length, 2);
+  assert.match(harness.messages[1].content, /incoming-display-id/);
+  for (const fn of handlers.get("agent_settled") ?? []) await fn({}, ctx);
+  assert.equal(harness.messages.length, 2, "only one reminder");
+  await tools.get("team_reply").execute("cleanup", { requestId: "incoming-display-id", text: "done" }, undefined, undefined, ctx);
+  assert.equal(harness.entries.length, 1);
 });
